@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>My Travels</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:#fff;color:#000;-webkit-font-smoothing:antialiased}
+input,textarea,button{font-family:inherit}
+button{cursor:pointer}
+
+/* NAV */
+.nav{position:fixed;top:0;left:0;right:0;height:44px;border-bottom:1px solid #000;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 20px;z-index:100}
+.nav-logo{font-size:11px;font-weight:900;letter-spacing:.1em;text-transform:uppercase}
+#nav-back{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;background:none;border:none;display:none}
+#nav-back:hover{color:#000}
+.page{display:none;padding-top:44px;min-height:100vh}
+.page.active{display:block}
+
+/* ── P1 ── */
+.p1-hd{padding:32px 20px 24px;border-bottom:1px solid #000}
+.p1-ey{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888;margin-bottom:8px}
+.p1-ti{font-size:64px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88}
+.trip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+
+/* 카드 */
+.tcard{border-right:1px solid #000;border-bottom:1px solid #000;cursor:pointer;position:relative;background:#fff}
+.tcard:hover{background:#fafafa}
+.tcard-ov{position:absolute;top:10px;right:10px;display:flex;gap:4px;opacity:0;transition:opacity .15s;z-index:5}
+.tcard:hover .tcard-ov{opacity:1}
+.tcard-ovbtn{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:2px 8px}
+.tcard-ovbtn:hover{background:#000;color:#fff}
+.tcard-body{padding:18px 20px 0}
+.tw1{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block}
+.trow2{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:6px}
+.timg1{width:96px;height:64px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:22px;border-radius:12px}
+.timg1 img{width:100%;height:100%;object-fit:cover;display:block}
+.tw2{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;text-align:right;flex:1}
+.tw3{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;margin-top:6px}
+.tfoot{border-top:1px solid #000;margin-top:16px;padding:12px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.tmeta{flex:1;display:flex;flex-direction:column;gap:4px}
+.tml{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:#555;line-height:1.5}
+.timg2{width:68px;height:68px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:20px}
+.timg2 img{width:100%;height:100%;object-fit:cover;display:block}
+.add-card{border-right:1px solid #000;border-bottom:1px solid #000;min-height:280px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;color:#ccc}
+.add-card:hover{background:#f5f5f5;color:#888}
+.add-card-plus{font-size:28px;font-weight:200}
+.add-card-lbl{font-size:9px;letter-spacing:.12em;text-transform:uppercase}
+
+/* ── P2 ── */
+.p2-hd{padding:32px 20px 24px;border-bottom:1px solid #000}
+.p2-ey{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888;margin-bottom:6px}
+.p2-ti{font-size:40px;font-weight:900;letter-spacing:-.03em;text-transform:uppercase;line-height:.92}
+.rlist{display:flex;flex-direction:column}
+.rrow{display:flex;align-items:stretch;border-bottom:.5px solid #ddd;cursor:pointer}
+.rrow:hover{background:#f5f5f5}
+.rday{width:52px;flex-shrink:0;border-right:1px solid #000;display:flex;align-items:center;justify-content:center;padding:14px 0}
+.rday-lbl{font-size:9px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;writing-mode:vertical-rl;transform:rotate(180deg)}
+.rbody{flex:1;padding:12px 16px;display:flex;flex-direction:column;gap:5px}
+.rdate{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888}
+.rstops{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.rstop{font-size:10px;color:#000}
+.rarr{font-size:9px;color:#ccc}
+.rbtns{display:flex;align-items:center;gap:5px;padding-right:12px;flex-shrink:0}
+.rbtn{font-size:8px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:2px 7px;color:#888}
+.rbtn:hover{border-color:#000;color:#000}
+.radd{padding:14px 16px;border-bottom:.5px solid #ddd;cursor:pointer;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888}
+.radd:hover{background:#f5f5f5;color:#000}
+
+/* ── P3 ── */
+.p3-hd{padding:24px 20px 16px;border-bottom:1px solid #000}
+.p3-ey{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888;margin-bottom:8px}
+.p3-ti{font-size:40px;font-weight:900;letter-spacing:-.03em;text-transform:uppercase;line-height:.92;white-space:pre-line}
+.wbar{padding:11px 20px;border-bottom:1px solid #000;display:flex;align-items:center;gap:10px}
+.wicon{font-size:16px;flex-shrink:0}
+.wvline{width:.5px;height:44px;background:#000;flex-shrink:0}
+.wtexts{display:flex;flex-direction:column;gap:3px;flex:1}
+.wcond{font-size:13px;font-weight:700;color:#000;letter-spacing:-.01em}
+.wdesc{font-size:10px;color:#555;letter-spacing:.02em}
+.woutfit{display:flex;align-items:center;gap:4px}
+.woutfit-lbl{font-size:10px;color:#888;flex-shrink:0}
+.woutfit-in{font-size:10px;color:#000;border:none;outline:none;background:transparent;flex:1;padding:0}
+.woutfit-in::placeholder{color:#ccc}
+.places{display:flex;flex-direction:column}
+.pitem{padding:12px 16px;border-bottom:.5px solid #ddd}
+.ptop{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px}
+.pleft{flex:1}
+.pright{display:flex;gap:5px;align-items:center;flex-shrink:0}
+.pcat{font-size:8px;letter-spacing:.12em;text-transform:uppercase;color:#888;margin-bottom:2px}
+.pname{font-size:14px;font-weight:700;color:#000;letter-spacing:-.01em}
+.open-b{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;padding:1px 5px}
+.closed-b{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #ccc;color:#888;padding:1px 5px}
+.phrs{font-size:10px;color:#555;margin-bottom:6px}
+.pmemo{font-size:10px;color:#333;background:#f0f0f0;padding:5px 8px;font-style:italic;border:none;outline:none;width:100%;resize:none;display:block}
+.pmemo::placeholder{color:#ccc;font-style:italic}
+.delbtn{font-size:8px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888}
+.delbtn:hover{border-color:#000;color:#000}
+.dirbar{padding:8px 16px;background:#f7f7f7;display:flex;align-items:center;gap:8px;cursor:pointer;border-bottom:.5px solid #ddd}
+.dirbar:hover{background:#e8e8e8}
+.dirline{height:.5px;flex:1;background:#000}
+.dirtxt{font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:#000;white-space:nowrap}
+.add-place{padding:16px 20px;display:flex;flex-direction:column;gap:8px;border-top:.5px solid #ddd}
+.add-place-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#000;font-weight:500}
+.add-place-hint{font-size:8px;color:#aaa;line-height:1.5}
+.add-place-row{display:flex;gap:8px}
+.add-place-in{font-size:11px;border:.5px solid #ddd;padding:9px 12px;outline:none;flex:1;background:#fff;color:#000}
+.add-place-in:focus{border-color:#000}
+.add-place-in::placeholder{color:#bbb}
+.add-place-btn{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:9px 16px;color:#000;white-space:nowrap}
+.add-place-btn:hover:not(:disabled){background:#000;color:#fff}
+.add-place-btn:disabled{opacity:.35}
+
+/* MODAL */
+#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto}
+.mbox{background:#fff;border:1px solid #000;width:100%;max-width:380px;margin:auto}
+.mhd{padding:14px 18px;border-bottom:1px solid #000;display:flex;justify-content:space-between;align-items:center}
+.mtitle{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888}
+.mclose{font-size:22px;color:#888;background:none;border:none;line-height:1}
+.mbody{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
+.mfield{display:flex;flex-direction:column;gap:4px}
+.mlbl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888}
+.mhint{font-size:8px;color:#aaa;line-height:1.4}
+.min{font-size:12px;border:.5px solid #ddd;padding:8px 10px;outline:none;width:100%;color:#000;background:#fff}
+.min:focus{border-color:#000}
+.mfoot{padding:14px 18px;border-top:.5px solid #ddd}
+.mbtn{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:9px 16px;color:#000}
+.mbtn:hover{background:#000;color:#fff}
+.photo-row{display:flex;align-items:center;gap:8px;margin-top:4px}
+.photo-btn{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:5px 10px;color:#000;flex-shrink:0}
+.photo-btn:hover{background:#000;color:#fff}
+.photo-name{font-size:9px;color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.photo-prev{width:80px;height:56px;object-fit:cover;border:1px solid #000;margin-top:6px;display:none}
+</style>
+</head>
+<body>
+
+<!-- 숨겨진 파일 input — body 최상단에 고정 -->
+<input type="file" id="fi1" accept="image/*" style="position:fixed;top:-999px;left:-999px;opacity:0"/>
+<input type="file" id="fi2" accept="image/*" style="position:fixed;top:-999px;left:-999px;opacity:0"/>
+
+<nav class="nav">
+  <span class="nav-logo" id="nav-logo">MY TRAVELS</span>
+  <button id="nav-back">← 뒤로</button>
+</nav>
+
+<div id="p1" class="page active">
+  <div class="p1-hd">
+    <div class="p1-ey">[ My Travels ]</div>
+    <div class="p1-ti">TRIPS.</div>
+  </div>
+  <div class="trip-grid" id="p1-grid"></div>
+</div>
+
+<div id="p2" class="page">
+  <div class="p2-hd">
+    <div class="p2-ey" id="p2-sub"></div>
+    <div class="p2-ti" id="p2-ti"></div>
+  </div>
+  <div class="rlist" id="p2-list"></div>
+</div>
+
+<div id="p3" class="page">
+  <div class="p3-hd">
+    <div class="p3-ey" id="p3-ey"></div>
+    <div class="p3-ti" id="p3-ti"></div>
+  </div>
+  <div class="wbar">
+    <div class="wicon" id="w-icon">—</div>
+    <div class="wvline"></div>
+    <div class="wtexts">
+      <div class="wcond" id="w-cond">날씨 불러오는 중…</div>
+      <div class="wdesc" id="w-desc"></div>
+      <div class="woutfit">
+        <span class="woutfit-lbl">[ 옷차림 ]</span>
+        <input class="woutfit-in" id="outfit-in" type="text" placeholder="직접 입력"/>
+      </div>
+    </div>
+  </div>
+  <div class="places" id="p3-places"></div>
+  <div class="add-place">
+    <div class="add-place-title">[ + 장소 추가 ]</div>
+    <div class="add-place-hint">구글맵 링크(maps.app.goo.gl) 또는 장소 이름 직접 입력<br>단축 URL은 이름 입력창이 뜹니다</div>
+    <div class="add-place-row">
+      <input class="add-place-in" id="place-in" type="text" placeholder="https://maps.app.goo.gl/... 또는 센소지"/>
+      <button class="add-place-btn" id="place-btn">추가 →</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal"></div>
+
+<script>
+/* =========================================================
+   STORE
+   ========================================================= */
+const DB = {
+  get trips() {
+    try { return JSON.parse(localStorage.getItem('mt_trips') || '[]') } catch { return [] }
+  },
+  save(t) { localStorage.setItem('mt_trips', JSON.stringify(t)) },
+
+  addTrip(data) {
+    const list = this.trips
+    data.id = 't' + Date.now()
+    data.days = data.days || []
+    list.push(data)
+    this.save(list)
+    return data
+  },
+  getTrip(id) { return this.trips.find(t => t.id === id) },
+  updateTrip(id, patch) {
+    const list = this.trips
+    const i = list.findIndex(t => t.id === id)
+    if (i < 0) return
+    list[i] = Object.assign({}, list[i], patch)
+    this.save(list)
+  },
+  deleteTrip(id) { this.save(this.trips.filter(t => t.id !== id)) },
+
+  addDay(tripId, data) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    trip.days = trip.days || []
+    data.id = 'd' + Date.now()
+    data.places = []
+    trip.days.push(data)
+    this.save(list)
+    return data
+  },
+  updateDay(tripId, dayId, patch) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    const i = trip.days.findIndex(d => d.id === dayId)
+    if (i < 0) return
+    trip.days[i] = Object.assign({}, trip.days[i], patch)
+    this.save(list)
+  },
+  deleteDay(tripId, dayId) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    trip.days = trip.days.filter(d => d.id !== dayId)
+    this.save(list)
+  },
+
+  addPlace(tripId, dayId, data) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    const day = trip.days.find(d => d.id === dayId)
+    if (!day) return
+    data.id = 'p' + Date.now()
+    day.places.push(data)
+    this.save(list)
+    return data
+  },
+  updatePlace(tripId, dayId, placeId, patch) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    const day = trip.days.find(d => d.id === dayId)
+    if (!day) return
+    const i = day.places.findIndex(p => p.id === placeId)
+    if (i < 0) return
+    day.places[i] = Object.assign({}, day.places[i], patch)
+    this.save(list)
+  },
+  deletePlace(tripId, dayId, placeId) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    const day = trip.days.find(d => d.id === dayId)
+    if (!day) return
+    day.places = day.places.filter(p => p.id !== placeId)
+    this.save(list)
+  }
+}
+
+/* =========================================================
+   ROUTER
+   ========================================================= */
+const state = { page: 'p1', tripId: null, dayId: null }
+
+function go(page, params) {
+  Object.assign(state, { page }, params || {})
+  renderPage()
+}
+
+function renderPage() {
+  document.querySelectorAll('.page').forEach(el => el.classList.remove('active'))
+  document.getElementById(state.page).classList.add('active')
+  const back = document.getElementById('nav-back')
+  const logo = document.getElementById('nav-logo')
+  if (state.page === 'p1') {
+    back.style.display = 'none'
+    logo.textContent = 'MY TRAVELS'
+    renderP1()
+  } else if (state.page === 'p2') {
+    back.style.display = 'block'
+    back.onclick = () => go('p1')
+    const trip = DB.getTrip(state.tripId)
+    logo.textContent = trip ? cleanName(trip.name) : ''
+    renderP2()
+  } else if (state.page === 'p3') {
+    back.style.display = 'block'
+    back.onclick = () => go('p2', { tripId: state.tripId })
+    logo.textContent = 'DAY DETAIL'
+    renderP3()
+  }
+}
+
+/* 슬래시 제거 — 카드 외 모든 표시에 사용 */
+function cleanName(name) {
+  return (name || '').replace(/\//g, '').toUpperCase()
+}
+
+/* =========================================================
+   CATEGORY
+   ========================================================= */
+const CAT = {
+  restaurant: { e: '🍽️', l: '식당' },
+  cafe:       { e: '☕',  l: '카페' },
+  bar:        { e: '🍺',  l: '바·술집' },
+  hotel:      { e: '🏨',  l: '숙소' },
+  attraction: { e: '📸',  l: '관광지' },
+  shopping:   { e: '🛒',  l: '쇼핑' }
+}
+function guessCat(types) {
+  types = types || []
+  if (types.some(t => ['lodging','hotel'].includes(t))) return 'hotel'
+  if (types.some(t => ['bar','night_club'].includes(t))) return 'bar'
+  if (types.some(t => t.includes('cafe') || t.includes('coffee'))) return 'cafe'
+  if (types.some(t => ['restaurant','food','meal_takeaway','meal_delivery'].includes(t))) return 'restaurant'
+  if (types.some(t => ['shopping_mall','clothing_store','store'].includes(t))) return 'shopping'
+  return 'attraction'
+}
+
+/* =========================================================
+   WEATHER
+   ========================================================= */
+async function fetchWeather(lat, lon, date) {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto&start_date=${date}&end_date=${date}`
+    const res = await fetch(url)
+    const json = await res.json()
+    const code = json.daily.weathercode[0]
+    const max = Math.round(json.daily.temperature_2m_max[0])
+    const min = Math.round(json.daily.temperature_2m_min[0])
+    return interpWeather(code, max, min)
+  } catch { return null }
+}
+function interpWeather(code, max, min) {
+  const diff = max - min
+  let emoji = '🌤', cond = '맑음'
+  if (code === 0)       { emoji = '☀️'; cond = '맑음' }
+  else if (code <= 2)   { emoji = '🌤'; cond = '구름 조금' }
+  else if (code === 3)  { emoji = '☁️'; cond = '흐림' }
+  else if (code <= 49)  { emoji = '🌫'; cond = '안개' }
+  else if (code <= 59)  { emoji = '🌦'; cond = '이슬비' }
+  else if (code <= 69)  { emoji = '🌧'; cond = '비' }
+  else if (code <= 79)  { emoji = '❄️'; cond = '눈' }
+  else if (code <= 82)  { emoji = '🌧'; cond = '소나기' }
+  else                  { emoji = '⛈';  cond = '뇌우' }
+  let desc = ''
+  if (diff >= 10)               desc = '일교차 심함 — 겉옷 필수'
+  else if (code >= 61 && code <= 67) desc = '비 예보 — 우산 챙기기'
+  else if (code >= 71 && code <= 77) desc = '눈 예보 — 미끄러움 주의'
+  else if (max >= 30)           desc = '더운 날씨 — 얇은 옷, 물 챙기기'
+  else if (max <= 5)            desc = '매우 추움 — 두꺼운 패딩 필수'
+  else if (max <= 12)           desc = '쌀쌀함 — 코트 필요'
+  else                          desc = `최고 ${max}° / 최저 ${min}°`
+  return { emoji, cond, desc, avg: Math.round((max + min) / 2) }
+}
+function applyWeather(w) {
+  document.getElementById('w-icon').textContent = w.emoji
+  document.getElementById('w-cond').textContent = `${w.cond} · ${w.avg}°C`
+  document.getElementById('w-desc').textContent = w.desc
+}
+
+/* =========================================================
+   PAGE 1
+   ========================================================= */
+function renderP1() {
+  const grid = document.getElementById('p1-grid')
+  grid.innerHTML = ''
+
+  DB.trips.forEach(trip => {
+    // 슬래시 기준으로 3줄 분리
+    let w1, w2, w3
+    if (trip.name.includes('/')) {
+      const parts = trip.name.split('/')
+      w1 = parts[0] || ''; w2 = parts[1] || ''; w3 = parts.slice(2).join('/') || trip.emoji || '.'
+    } else {
+      const words = trip.name.trim().split(/\s+/)
+      if (words.length >= 3)      { w1 = words[0]; w2 = words[1]; w3 = words.slice(2).join(' ') }
+      else if (words.length === 2) { w1 = words[0]; w2 = ''; w3 = words[1] }
+      else {
+        const s = words[0] || '', m = Math.ceil(s.length / 3)
+        w1 = s.slice(0, m); w2 = s.slice(m, m*2); w3 = s.slice(m*2) || trip.emoji || '.'
+      }
+    }
+
+    const img1Html = trip.photo1
+      ? `<img src="${trip.photo1}" alt=""/>`
+      : `<span style="font-size:22px">${trip.emoji || '✈️'}</span>`
+    const img2Html = trip.photo2
+      ? `<img src="${trip.photo2}" alt=""/>`
+      : `<span style="font-size:20px">${trip.emoji || '✈️'}</span>`
+
+    const card = document.createElement('div')
+    card.className = 'tcard'
+    card.innerHTML = `
+      <div class="tcard-ov">
+        <button class="tcard-ovbtn" data-action="edit" data-id="${trip.id}">수정</button>
+        <button class="tcard-ovbtn" data-action="del" data-id="${trip.id}">삭제</button>
+      </div>
+      <div class="tcard-body">
+        <span class="tw1">${w1.toUpperCase()}</span>
+        <div class="trow2">
+          <div class="timg1">${img1Html}</div>
+          <span class="tw2">${(w2 || trip.emoji || '.').toUpperCase()}</span>
+        </div>
+        <span class="tw3">${(w3 || '.').toUpperCase()}</span>
+      </div>
+      <div class="tfoot">
+        <div class="tmeta">
+          <span class="tml">{${trip.dateStart || ''} – ${trip.dateEnd || ''}}</span>
+          <span class="tml">${trip.countries || ''}</span>
+          <span class="tml">${trip.companions || ''}</span>
+        </div>
+        <div class="timg2">${img2Html}</div>
+      </div>`
+
+    card.addEventListener('click', e => {
+      const btn = e.target.closest('[data-action]')
+      if (btn) {
+        e.stopPropagation()
+        if (btn.dataset.action === 'edit') openTripModal(trip.id)
+        else if (btn.dataset.action === 'del') {
+          if (confirm('이 여행을 삭제할까요?')) { DB.deleteTrip(trip.id); renderP1() }
+        }
+      } else {
+        go('p2', { tripId: trip.id })
+      }
+    })
+    grid.appendChild(card)
+  })
+
+  const addCard = document.createElement('div')
+  addCard.className = 'add-card'
+  addCard.innerHTML = `<span class="add-card-plus">+</span><span class="add-card-lbl">새 여행 추가</span>`
+  addCard.onclick = () => openTripModal(null)
+  grid.appendChild(addCard)
+}
+
+/* =========================================================
+   PAGE 2
+   ========================================================= */
+function renderP2() {
+  const trip = DB.getTrip(state.tripId)
+  if (!trip) return
+  document.getElementById('p2-sub').textContent = `${trip.dateStart || ''} – ${trip.dateEnd || ''}  ·  ${trip.countries || ''}`
+  document.getElementById('p2-ti').textContent = cleanName(trip.name)
+
+  const list = document.getElementById('p2-list')
+  list.innerHTML = ''
+
+  ;(trip.days || []).forEach((day, i) => {
+    const row = document.createElement('div')
+    row.className = 'rrow'
+    const stopsHtml = (day.places || []).length
+      ? (day.places || []).map(p => `<span class="rstop">${CAT[p.category]?.e || '📍'} ${p.name}</span><span class="rarr">→</span>`).join('').replace(/<span class="rarr">→<\/span>$/, '')
+      : '<span style="font-size:9px;color:#ccc;letter-spacing:.08em;text-transform:uppercase">장소 없음</span>'
+
+    row.innerHTML = `
+      <div class="rday"><span class="rday-lbl">Day ${i + 1}</span></div>
+      <div class="rbody">
+        <div class="rdate">${day.date || ''} ${trip.emoji || ''}</div>
+        <div class="rstops">${stopsHtml}</div>
+      </div>
+      <div class="rbtns">
+        <button class="rbtn" data-action="edit" data-tid="${trip.id}" data-did="${day.id}">수정</button>
+        <button class="rbtn" data-action="del"  data-tid="${trip.id}" data-did="${day.id}">삭제</button>
+        <span style="font-size:10px;color:#ccc;margin-left:2px">→</span>
+      </div>`
+
+    row.addEventListener('click', e => {
+      const btn = e.target.closest('[data-action]')
+      if (btn) {
+        e.stopPropagation()
+        if (btn.dataset.action === 'edit') openDayModal(trip.id, day.id)
+        else if (btn.dataset.action === 'del') {
+          if (confirm('이 날짜를 삭제할까요?')) { DB.deleteDay(trip.id, day.id); renderP2() }
+        }
+      } else {
+        go('p3', { tripId: trip.id, dayId: day.id })
+      }
+    })
+    list.appendChild(row)
+  })
+
+  const addRow = document.createElement('div')
+  addRow.className = 'radd'
+  addRow.textContent = '[ + 날짜 추가 ]'
+  addRow.onclick = () => openDayModal(trip.id, null)
+  list.appendChild(addRow)
+}
+
+/* =========================================================
+   PAGE 3
+   ========================================================= */
+function renderP3() {
+  const trip = DB.getTrip(state.tripId)
+  if (!trip) return
+  const day = (trip.days || []).find(d => d.id === state.dayId)
+  if (!day) return
+
+  const MON = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
+  const dateObj = day.date ? new Date(day.date) : null
+  const dayIdx = (trip.days || []).findIndex(d => d.id === state.dayId)
+
+  document.getElementById('p3-ey').textContent = `[ Day ${dayIdx + 1} ] — ${cleanName(trip.name)}`
+  document.getElementById('p3-ti').textContent = dateObj ? `${MON[dateObj.getMonth()]}\n${dateObj.getDate()}.` : ''
+
+  // 옷차림
+  const oi = document.getElementById('outfit-in')
+  oi.value = day.outfit || ''
+  oi.onchange = () => DB.updateDay(state.tripId, state.dayId, { outfit: oi.value })
+
+  // 날씨
+  if (day.weather) {
+    applyWeather(day.weather)
+  } else if (trip.lat && trip.lon && day.date) {
+    document.getElementById('w-cond').textContent = '날씨 불러오는 중…'
+    fetchWeather(trip.lat, trip.lon, day.date).then(w => {
+      if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); applyWeather(w) }
+      else { document.getElementById('w-icon').textContent = '—'; document.getElementById('w-cond').textContent = '날씨 없음' }
+    })
+  } else {
+    document.getElementById('w-icon').textContent = '—'
+    document.getElementById('w-cond').textContent = '날씨 없음'
+    document.getElementById('w-desc').textContent = '장소 추가 시 해당 도시 날씨가 자동 표시됩니다'
+  }
+
+  // 장소 목록
+  renderPlaces()
+
+  // 장소 추가 버튼
+  const btn = document.getElementById('place-btn')
+  const inp = document.getElementById('place-in')
+  btn.onclick = () => doAddPlace()
+  inp.onkeydown = e => { if (e.key === 'Enter') doAddPlace() }
+}
+
+function renderPlaces() {
+  const trip = DB.getTrip(state.tripId)
+  if (!trip) return
+  const day = (trip.days || []).find(d => d.id === state.dayId)
+  if (!day) return
+
+  const list = document.getElementById('p3-places')
+  list.innerHTML = ''
+
+  ;(day.places || []).forEach((place, i) => {
+    // 이동 배지
+    if (i > 0) {
+      const prev = day.places[i - 1]
+      const bar = document.createElement('div')
+      bar.className = 'dirbar'
+      const modeIcon = place.dirMode === 'transit' ? '🚇' : place.dirMode === 'driving' ? '🚕' : '🚶'
+      const dur = place.dirDuration || '—'
+      const dist = place.dirDistance ? ` · ${place.dirDistance}` : ''
+      bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
+      if (prev.lat && place.lat) {
+        const mode = place.dirMode || 'walking'
+        const url = `https://www.google.com/maps/dir/?api=1&origin=${prev.lat},${prev.lng}&destination=${place.lat},${place.lng}&travelmode=${mode}`
+        bar.onclick = () => window.open(url, '_blank')
+      }
+      list.appendChild(bar)
+    }
+
+    const cat = CAT[place.category] || CAT.attraction
+    const item = document.createElement('div')
+    item.className = 'pitem'
+    item.innerHTML = `
+      <div class="ptop">
+        <div class="pleft">
+          <div class="pcat">[ ${cat.e} ${cat.l} ]</div>
+          <div class="pname">${place.name}</div>
+        </div>
+        <div class="pright">
+          ${place.isOpen === true ? '<span class="open-b">OPEN</span>' : place.isOpen === false ? '<span class="closed-b">CLOSED</span>' : ''}
+          <button class="delbtn" data-pid="${place.id}">삭제</button>
+        </div>
+      </div>
+      <div class="phrs">${place.hours || '영업시간 정보 없음'}</div>
+      <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
+
+    item.querySelector('.delbtn').onclick = () => {
+      DB.deletePlace(state.tripId, state.dayId, place.id)
+      renderPlaces()
+    }
+    item.querySelector('textarea').onchange = e => {
+      DB.updatePlace(state.tripId, state.dayId, place.id, { memo: e.target.value })
+    }
+    list.appendChild(item)
+  })
+}
+
+/* =========================================================
+   장소 추가
+   ========================================================= */
+async function doAddPlace() {
+  const inp = document.getElementById('place-in')
+  const btn = document.getElementById('place-btn')
+  const raw = inp.value.trim()
+  if (!raw) return
+
+  btn.textContent = '불러오는 중…'
+  btn.disabled = true
+
+  try {
+    // 구글맵 URL → 좌표 추출 (날씨용)
+    if (raw.startsWith('http')) {
+      const coordMatch = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/)
+      if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]), lon = parseFloat(coordMatch[2])
+        const trip = DB.getTrip(state.tripId)
+        if (!trip.lat) {
+          DB.updateTrip(state.tripId, { lat, lon })
+          const day = DB.getTrip(state.tripId).days.find(d => d.id === state.dayId)
+          if (!day.weather && day.date) {
+            fetchWeather(lat, lon, day.date).then(w => {
+              if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); applyWeather(w) }
+            })
+          }
+        }
+      }
+    }
+
+    // 장소 검색 타겟 결정
+    let target = raw
+    if (raw.startsWith('http')) {
+      const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]+)/)
+      const pnM  = raw.match(/\/place\/([^/@?+]+)/)
+      const pqM  = raw.match(/[?&]q=([^&]+)/)
+      if (pidM)      target = pidM[1]
+      else if (pnM)  target = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
+      else if (pqM)  target = decodeURIComponent(pqM[1].replace(/\+/g, ' '))
+      else {
+        // 단축 URL → 모달로 이름 받기
+        btn.textContent = '추가 →'; btn.disabled = false
+        inp.value = ''
+        openNameModal()
+        return
+      }
+    }
+
+    await savePlace(target)
+    inp.value = ''
+  } finally {
+    btn.textContent = '추가 →'
+    btn.disabled = false
+  }
+}
+
+async function savePlace(nameOrId) {
+  let place = { name: nameOrId, category: 'attraction', hours: '', isOpen: null, memo: '' }
+
+  // Google Maps API가 로드됐으면 상세정보 조회
+  if (typeof google !== 'undefined' && google.maps && google.maps.places) {
+    try {
+      const detail = await queryPlaces(nameOrId)
+      if (detail) place = detail
+    } catch (e) { /* API 실패해도 이름으로 저장 */ }
+  }
+
+  // 이전 장소와 경로 계산
+  const trip = DB.getTrip(state.tripId)
+  const day = trip.days.find(d => d.id === state.dayId)
+  const prev = (day.places || []).slice(-1)[0]
+  if (prev && prev.lat && place.lat && typeof google !== 'undefined' && google.maps) {
+    try {
+      const dir = await calcDir(prev, place)
+      if (dir) { place.dirMode = dir.mode; place.dirDuration = dir.dur; place.dirDistance = dir.dist }
+    } catch (e) {}
+  }
+
+  DB.addPlace(state.tripId, state.dayId, place)
+  renderPlaces()
+}
+
+function openNameModal() {
+  const modal = document.getElementById('modal')
+  modal.innerHTML = `<div class="mbox">
+    <div class="mhd">
+      <span class="mtitle">[ 장소 이름 입력 ]</span>
+      <button class="mclose" onclick="closeModal()">×</button>
+    </div>
+    <div class="mbody">
+      <div class="mfield">
+        <span class="mlbl">장소 이름</span>
+        <span class="mhint">구글맵 단축 URL은 장소 이름으로 검색합니다</span>
+        <input class="min" id="name-in" placeholder="예) 센소지" autofocus/>
+      </div>
+    </div>
+    <div class="mfoot"><button class="mbtn" id="name-ok">추가 →</button></div>
+  </div>`
+  modal.style.display = 'flex'
+
+  const go = async () => {
+    const v = document.getElementById('name-in').value.trim()
+    if (!v) return
+    closeModal()
+    await savePlace(v)
+  }
+  document.getElementById('name-ok').onclick = go
+  document.getElementById('name-in').onkeydown = e => { if (e.key === 'Enter') go() }
+  setTimeout(() => document.getElementById('name-in')?.focus(), 50)
+}
+
+/* =========================================================
+   Places API
+   ========================================================= */
+function queryPlaces(input) {
+  return new Promise(resolve => {
+    const svc = new google.maps.places.PlacesService(document.createElement('div'))
+    const isId = /^ChIJ|^Eh/.test(input) || (input.length > 25 && !/\s/.test(input))
+    const fields = ['name', 'types', 'opening_hours', 'geometry']
+
+    const doDetail = id => {
+      svc.getDetails({ placeId: id, fields }, (r, s) => {
+        if (s === 'OK') resolve(parsePlaceResult(r))
+        else resolve(null)
+      })
+    }
+
+    if (isId) {
+      doDetail(input)
+    } else {
+      svc.findPlaceFromQuery(
+        { query: input, fields: ['place_id', 'name', 'geometry'] },
+        (res, s) => {
+          if (s === 'OK' && res && res[0]) doDetail(res[0].place_id)
+          else resolve(null)
+        }
+      )
+    }
+  })
+}
+
+function parsePlaceResult(r) {
+  const oh = r.opening_hours
+  const dayOfWeek = new Date().getDay()
+  const idx = dayOfWeek === 0 ? 6 : dayOfWeek - 1
+  return {
+    name: r.name,
+    category: guessCat(r.types || []),
+    hours: oh && oh.weekday_text ? (oh.weekday_text[idx] || '') : '',
+    isOpen: oh && oh.isOpen ? oh.isOpen() : null,
+    lat: r.geometry && r.geometry.location ? r.geometry.location.lat() : null,
+    lng: r.geometry && r.geometry.location ? r.geometry.location.lng() : null,
+    memo: ''
+  }
+}
+
+function calcDir(origin, dest) {
+  return new Promise(resolve => {
+    const svc = new google.maps.DirectionsService()
+    svc.route(
+      { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'WALKING' },
+      (r, s) => {
+        if (s !== 'OK') { resolve(null); return }
+        const leg = r.routes[0].legs[0]
+        if (leg.distance.value > 2000) {
+          svc.route(
+            { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'TRANSIT' },
+            (r2, s2) => {
+              if (s2 === 'OK') resolve({ mode: 'transit', dur: r2.routes[0].legs[0].duration.text, dist: r2.routes[0].legs[0].distance.text })
+              else resolve({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
+            }
+          )
+        } else {
+          resolve({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
+        }
+      }
+    )
+  })
+}
+
+/* =========================================================
+   파일 읽기
+   ========================================================= */
+function readFile(file) {
+  return new Promise(resolve => {
+    const fr = new FileReader()
+    fr.onload = e => resolve(e.target.result)
+    fr.readAsDataURL(file)
+  })
+}
+
+/* =========================================================
+   여행 모달
+   ========================================================= */
+function openTripModal(editId) {
+  const trip = editId ? DB.getTrip(editId) : null
+  const modal = document.getElementById('modal')
+
+  modal.innerHTML = `<div class="mbox">
+    <div class="mhd">
+      <span class="mtitle">[ ${trip ? '여행 수정' : '새 여행 추가'} ]</span>
+      <button class="mclose" onclick="closeModal()">×</button>
+    </div>
+    <div class="mbody">
+      <div class="mfield">
+        <span class="mlbl">여행 이름</span>
+        <span class="mhint">슬래시(/)로 카드 3줄 분리 — 예) Chun/ch/eon</span>
+        <input class="min" id="f-name" value="${trip ? trip.name : ''}" placeholder="도쿄 봄 여행"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">국가 이모지</span>
+        <input class="min" id="f-emoji" value="${trip ? trip.emoji || '' : ''}" placeholder="🇯🇵" maxlength="4"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">시작일</span>
+        <input class="min" id="f-start" type="date" value="${trip ? trip.dateStart || '' : ''}"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">종료일</span>
+        <input class="min" id="f-end" type="date" value="${trip ? trip.dateEnd || '' : ''}"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">국가/도시</span>
+        <input class="min" id="f-countries" value="${trip ? trip.countries || '' : ''}" placeholder="도쿄 · 교토 · 오사카"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">같이 간 사람</span>
+        <input class="min" id="f-companions" value="${trip ? trip.companions || '' : ''}" placeholder="혼자 / 홍길동"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">사진 1 — 카드 중간 왼쪽 (둥근 프레임)</span>
+        <div class="photo-row">
+          <button class="photo-btn" id="btn-p1">파일 선택</button>
+          <span class="photo-name" id="nm-p1">${trip && trip.photo1 ? '✓ 기존 사진 있음' : '선택 안됨'}</span>
+        </div>
+        <img class="photo-prev" id="prev-p1" ${trip && trip.photo1 ? `src="${trip.photo1}" style="display:block;border-radius:10px"` : ''}/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">사진 2 — 카드 하단 오른쪽</span>
+        <div class="photo-row">
+          <button class="photo-btn" id="btn-p2">파일 선택</button>
+          <span class="photo-name" id="nm-p2">${trip && trip.photo2 ? '✓ 기존 사진 있음' : '선택 안됨'}</span>
+        </div>
+        <img class="photo-prev" id="prev-p2" ${trip && trip.photo2 ? `src="${trip.photo2}" style="display:block"` : ''}/>
+      </div>
+    </div>
+    <div class="mfoot"><button class="mbtn" id="btn-save">${trip ? '저장 →' : '추가 →'}</button></div>
+  </div>`
+  modal.style.display = 'flex'
+
+  // hidden input에 연결
+  const fi1 = document.getElementById('fi1')
+  const fi2 = document.getElementById('fi2')
+  fi1.value = ''; fi2.value = ''
+
+  document.getElementById('btn-p1').onclick = () => fi1.click()
+  document.getElementById('btn-p2').onclick = () => fi2.click()
+
+  fi1.onchange = () => {
+    const f = fi1.files[0]; if (!f) return
+    document.getElementById('nm-p1').textContent = f.name
+    readFile(f).then(src => {
+      const img = document.getElementById('prev-p1')
+      img.src = src; img.style.display = 'block'; img.style.borderRadius = '10px'
+    })
+  }
+  fi2.onchange = () => {
+    const f = fi2.files[0]; if (!f) return
+    document.getElementById('nm-p2').textContent = f.name
+    readFile(f).then(src => {
+      const img = document.getElementById('prev-p2')
+      img.src = src; img.style.display = 'block'
+    })
+  }
+
+  document.getElementById('btn-save').onclick = async () => {
+    const name = document.getElementById('f-name').value.trim()
+    if (!name) { alert('여행 이름을 입력해주세요'); return }
+
+    const data = {
+      name,
+      emoji:       document.getElementById('f-emoji').value.trim(),
+      dateStart:   document.getElementById('f-start').value,
+      dateEnd:     document.getElementById('f-end').value,
+      countries:   document.getElementById('f-countries').value.trim(),
+      companions:  document.getElementById('f-companions').value.trim(),
+      photo1:      trip ? trip.photo1 || null : null,
+      photo2:      trip ? trip.photo2 || null : null,
+    }
+
+    if (fi1.files[0]) data.photo1 = await readFile(fi1.files[0])
+    if (fi2.files[0]) data.photo2 = await readFile(fi2.files[0])
+
+    if (editId) {
+      DB.updateTrip(editId, data)
+    } else {
+      DB.addTrip(data)
+    }
+    closeModal()
+    renderP1()
+  }
+}
+
+/* =========================================================
+   날짜 모달
+   ========================================================= */
+function openDayModal(tripId, editDayId) {
+  const trip = DB.getTrip(tripId)
+  const day = editDayId ? (trip.days || []).find(d => d.id === editDayId) : null
+  const modal = document.getElementById('modal')
+
+  modal.innerHTML = `<div class="mbox">
+    <div class="mhd">
+      <span class="mtitle">[ ${day ? '날짜 수정' : '날짜 추가'} ]</span>
+      <button class="mclose" onclick="closeModal()">×</button>
+    </div>
+    <div class="mbody">
+      <div class="mfield">
+        <span class="mlbl">날짜</span>
+        <input class="min" id="f-date" type="date" value="${day ? day.date || '' : ''}"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">메모 (선택)</span>
+        <input class="min" id="f-dmemo" value="${day ? day.memo || '' : ''}" placeholder="아사쿠사 & 우에노"/>
+      </div>
+    </div>
+    <div class="mfoot">
+      <button class="mbtn" id="btn-daysave">${day ? '저장 →' : '추가 →'}</button>
+    </div>
+  </div>`
+  modal.style.display = 'flex'
+
+  document.getElementById('btn-daysave').onclick = () => {
+    const date = document.getElementById('f-date').value
+    const memo = document.getElementById('f-dmemo').value.trim()
+    if (editDayId) {
+      DB.updateDay(tripId, editDayId, { date, memo })
+    } else {
+      DB.addDay(tripId, { date, memo })
+    }
+    closeModal()
+    renderP2()
+  }
+}
+
+/* =========================================================
+   MODAL CLOSE
+   ========================================================= */
+function closeModal() {
+  const modal = document.getElementById('modal')
+  modal.style.display = 'none'
+  modal.innerHTML = ''
+}
+
+/* =========================================================
+   INIT
+   ========================================================= */
+document.addEventListener('DOMContentLoaded', () => {
+  renderPage()
+  document.getElementById('modal').addEventListener('click', e => {
+    if (e.target.id === 'modal') closeModal()
+  })
+})
+</script>
+
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew&libraries=places" async defer></script>
+</body>
+</html>
