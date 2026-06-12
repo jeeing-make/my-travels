@@ -127,13 +127,12 @@ button{cursor:pointer}
 .mbtn{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:9px 16px;color:#000}
 .mbtn:hover{background:#000;color:#fff}
 
-/* 사진 업로드 — label로 input 감싸서 클릭 확실하게 */
-.photo-row{display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap}
-.photo-btn{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:6px 12px;color:#000;flex-shrink:0;display:inline-block;cursor:pointer}
-.photo-btn:hover{background:#000;color:#fff}
-.photo-btn input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
-.photo-name{font-size:9px;color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:60px}
-.photo-del{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 12px;color:#888;display:none}
+/* 사진 업로드 — 네이티브 file input을 그대로 보여줌 */
+.photo-row{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.photo-file{font-size:11px;border:.5px solid #ddd;padding:8px;width:100%;background:#fff;color:#000}
+.photo-actions{display:flex;align-items:center;gap:8px}
+.photo-name{font-size:9px;color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.photo-del{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 12px;color:#888;display:none;cursor:pointer}
 .photo-del:hover{border-color:#c00;color:#c00}
 .photo-prev{width:80px;height:56px;object-fit:cover;border:1px solid #000;margin-top:6px;display:none}
 </style>
@@ -199,7 +198,14 @@ const DB = {
   get trips() {
     try { return JSON.parse(localStorage.getItem('mt_trips') || '[]') } catch { return [] }
   },
-  save(t) { localStorage.setItem('mt_trips', JSON.stringify(t)) },
+  save(t) {
+    try {
+      localStorage.setItem('mt_trips', JSON.stringify(t))
+    } catch (e) {
+      console.error('저장 실패:', e)
+      throw e
+    }
+  },
 
   addTrip(data) {
     const list = this.trips
@@ -789,9 +795,27 @@ function calcDir(origin, dest) {
    파일 읽기
    ========================================================= */
 function readFile(file) {
+  // 큰 이미지는 리사이즈해서 base64 용량을 줄임
   return new Promise((resolve, reject) => {
     const fr = new FileReader()
-    fr.onload = e => resolve(e.target.result)
+    fr.onload = e => {
+      const img = new Image()
+      img.onload = () => {
+        const maxDim = 1000
+        let { width, height } = img
+        if (width > maxDim || height > maxDim) {
+          if (width > height) { height = Math.round(height * maxDim / width); width = maxDim }
+          else { width = Math.round(width * maxDim / height); height = maxDim }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width; canvas.height = height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, width, height)
+        resolve(canvas.toDataURL('image/jpeg', 0.8))
+      }
+      img.onerror = () => resolve(e.target.result) // 실패 시 원본
+      img.src = e.target.result
+    }
     fr.onerror = e => reject(e)
     fr.readAsDataURL(file)
   })
@@ -842,18 +866,22 @@ function openTripModal(editId) {
       <div class="mfield">
         <span class="mlbl">사진 1 — 카드 중간 왼쪽 (둥근 프레임)</span>
         <div class="photo-row">
-          <label class="photo-btn">파일 선택<input type="file" id="fi1" accept="image/*"/></label>
-          <span class="photo-name" id="nm-p1">${photo1 ? '✓ 사진 있음' : '선택 안됨'}</span>
-          <button type="button" class="photo-del" id="del-p1" style="${photo1 ? 'display:inline-block' : ''}">제거</button>
+          <input type="file" class="photo-file" id="fi1" accept="image/*"/>
+          <div class="photo-actions">
+            <span class="photo-name" id="nm-p1">${photo1 ? '✓ 사진 있음' : '선택 안됨'}</span>
+            <button type="button" class="photo-del" id="del-p1" style="${photo1 ? 'display:inline-block' : ''}">제거</button>
+          </div>
         </div>
         <img class="photo-prev" id="prev-p1" ${photo1 ? `src="${photo1}" style="display:block;border-radius:10px"` : ''}/>
       </div>
       <div class="mfield">
         <span class="mlbl">사진 2 — 카드 하단 오른쪽</span>
         <div class="photo-row">
-          <label class="photo-btn">파일 선택<input type="file" id="fi2" accept="image/*"/></label>
-          <span class="photo-name" id="nm-p2">${photo2 ? '✓ 사진 있음' : '선택 안됨'}</span>
-          <button type="button" class="photo-del" id="del-p2" style="${photo2 ? 'display:inline-block' : ''}">제거</button>
+          <input type="file" class="photo-file" id="fi2" accept="image/*"/>
+          <div class="photo-actions">
+            <span class="photo-name" id="nm-p2">${photo2 ? '✓ 사진 있음' : '선택 안됨'}</span>
+            <button type="button" class="photo-del" id="del-p2" style="${photo2 ? 'display:inline-block' : ''}">제거</button>
+          </div>
         </div>
         <img class="photo-prev" id="prev-p2" ${photo2 ? `src="${photo2}" style="display:block"` : ''}/>
       </div>
@@ -866,6 +894,7 @@ function openTripModal(editId) {
   const fi2 = document.getElementById('fi2')
 
   fi1.addEventListener('change', () => {
+    console.log('fi1 change', fi1.files)
     const f = fi1.files[0]; if (!f) return
     readFile(f).then(src => {
       photo1 = src
@@ -877,6 +906,7 @@ function openTripModal(editId) {
   })
 
   fi2.addEventListener('change', () => {
+    console.log('fi2 change', fi2.files)
     const f = fi2.files[0]; if (!f) return
     readFile(f).then(src => {
       photo2 = src
@@ -919,13 +949,22 @@ function openTripModal(editId) {
       photo2,
     }
 
-    if (editId) {
-      DB.updateTrip(editId, data)
-    } else {
-      DB.addTrip(data)
+    try {
+      if (editId) {
+        DB.updateTrip(editId, data)
+      } else {
+        DB.addTrip(data)
+      }
+      closeModal()
+      renderP1()
+    } catch (e) {
+      if (e && e.name === 'QuotaExceededError') {
+        alert('사진 파일이 너무 커서 저장에 실패했어요.\n사진 크기를 줄이거나(예: 1MB 이하), 사진 없이 저장해보세요.')
+      } else {
+        alert('저장 중 오류가 발생했어요: ' + (e && e.message ? e.message : e))
+      }
+      console.error('저장 오류:', e)
     }
-    closeModal()
-    renderP1()
   }
 }
 
