@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>My Travels</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&family=Noto+Serif+KR:wght@400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&family=Noto+Serif+KR:wght@400&family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Helvetica Neue',Helvetica,Arial,'Noto Color Emoji',sans-serif;background:#fff;color:#000;-webkit-font-smoothing:antialiased}
+body{font-family:'Helvetica Neue',Helvetica,Arial,'Noto Sans KR','Noto Color Emoji',sans-serif;background:#fff;color:#000;-webkit-font-smoothing:antialiased}
 input,textarea,button{font-family:inherit}
 button{cursor:pointer}
 
@@ -83,7 +83,7 @@ button{cursor:pointer}
 .p3-hd{padding:24px 20px 16px;border-bottom:1px solid #000}
 .p3-ey{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888;margin-bottom:8px}
 .p3-ti{font-size:40px;font-weight:900;letter-spacing:-.03em;text-transform:uppercase;line-height:.92;white-space:pre-line}
-.p3-weekday{font-size:24px;font-weight:900;letter-spacing:-.03em;vertical-align:middle}
+.p3-weekday{font-size:40px;font-weight:900;letter-spacing:-.03em;vertical-align:middle}
 .wbar{padding:11px 20px;border-bottom:1px solid #000;display:flex;align-items:center;gap:10px}
 .wicon{font-size:16px;flex-shrink:0}
 .wvline{width:.5px;height:44px;background:#000;flex-shrink:0}
@@ -993,6 +993,9 @@ function renderP2Flights(trip) {
         <div class="hotel-row-top">
           <input type="text" class="f-dep-name" placeholder="출발 공항 (예: 인천국제공항)" value="${flight.depInput || ''}"/>
         </div>
+        <div class="hotel-row-top">
+          <input type="text" class="f-dep-city" placeholder="표시될 도시명 (예: Seoul) — 비워두면 자동검색" value="${flight.depCity || ''}"/>
+        </div>
         <div class="hotel-dates">
           <input type="date" class="f-dep-date" value="${flight.depDate || ''}"/>
           <input type="time" class="f-dep-time" value="${flight.depTime || ''}"/>
@@ -1002,6 +1005,9 @@ function renderP2Flights(trip) {
         </div>
         <div class="hotel-row-top">
           <input type="text" class="f-arr-name" placeholder="도착 공항 (예: 나리타국제공항)" value="${flight.arrInput || ''}"/>
+        </div>
+        <div class="hotel-row-top">
+          <input type="text" class="f-arr-city" placeholder="표시될 도시명 (예: Prague) — 비워두면 자동검색" value="${flight.arrCity || ''}"/>
         </div>
         <div class="hotel-dates">
           <input type="date" class="f-arr-date" value="${flight.arrDate || ''}"/>
@@ -1021,16 +1027,18 @@ function renderP2Flights(trip) {
 
       row.querySelector('.f-dep-name').onchange = async e => {
         const val = e.target.value.trim()
-        save({ depInput: val, depName: null, depLat: null, depLng: null })
+        save({ depInput: val, depName: null, depLat: null, depLng: null, depCity: null })
         await resolveFlightAirport(trip.id, flight.id, 'dep')
         renderP2(); renderP3IfActive()
       }
       row.querySelector('.f-arr-name').onchange = async e => {
         const val = e.target.value.trim()
-        save({ arrInput: val, arrName: null, arrLat: null, arrLng: null })
+        save({ arrInput: val, arrName: null, arrLat: null, arrLng: null, arrCity: null })
         await resolveFlightAirport(trip.id, flight.id, 'arr')
         renderP2(); renderP3IfActive()
       }
+      row.querySelector('.f-dep-city').onchange = e => { save({ depCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
+      row.querySelector('.f-arr-city').onchange = e => { save({ arrCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
       row.querySelector('.f-dep-date').onchange = e => { save({ depDate: e.target.value }); renderP2(); renderP3IfActive() }
       row.querySelector('.f-dep-time').onchange = e => { save({ depTime: e.target.value }); renderP2(); renderP3IfActive() }
       row.querySelector('.f-arr-date').onchange = e => { save({ arrDate: e.target.value }); renderP2(); renderP3IfActive() }
