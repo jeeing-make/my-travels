@@ -144,6 +144,10 @@ button{cursor:pointer}
 
 /* 숙소 목록 */
 .hotel-list{display:flex;flex-direction:column;gap:8px}
+.hotel-section{padding:16px 20px;border-bottom:1px solid #000;display:flex;flex-direction:column;gap:8px}
+.hotel-section-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#000;font-weight:500}
+.hotel-section-hint{font-size:8px;color:#aaa;line-height:1.5}
+.hotel-resolved{font-size:9px;color:#0a0;letter-spacing:.02em}
 .hotel-row{border:.5px solid #ddd;padding:10px;display:flex;flex-direction:column;gap:6px}
 .hotel-row-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .hotel-row-top input{font-size:11px;border:.5px solid #ddd;padding:6px 8px;outline:none;flex:1;color:#000;background:#fff}
@@ -181,6 +185,12 @@ button{cursor:pointer}
   <div class="p2-hd">
     <div class="p2-ey" id="p2-sub"></div>
     <div class="p2-ti" id="p2-ti"></div>
+  </div>
+  <div class="hotel-section">
+    <div class="hotel-section-title">[ 🏨 숙소 ]</div>
+    <div class="hotel-section-hint">구글맵 링크 또는 이름 + 체크인/체크아웃 날짜. 해당 기간 Day 일정의 시작/끝에 자동 표시됩니다.</div>
+    <div class="hotel-list" id="p2-hotel-list"></div>
+    <button type="button" class="hotel-add" id="p2-hotel-add">+ 숙소 추가</button>
   </div>
   <div class="rlist" id="p2-list"></div>
 </div>
@@ -513,6 +523,8 @@ function renderP2() {
   document.getElementById('p2-sub').textContent = `${trip.dateStart || ''} – ${trip.dateEnd || ''}  ·  ${trip.countries || ''}`
   document.getElementById('p2-ti').textContent = cleanName(trip.name)
 
+  renderP2Hotels(trip)
+
   // 날짜 기준 자동 정렬 (날짜 없는 항목은 뒤로)
   if (trip.days && trip.days.length > 1) {
     const sorted = [...trip.days].sort((a, b) => {
@@ -616,6 +628,107 @@ function renderP3() {
   const inp = document.getElementById('place-in')
   btn.onclick = () => doAddPlace()
   inp.onkeydown = e => { if (e.key === 'Enter') doAddPlace() }
+}
+
+/* ── 2페이지 숙소 관리 ── */
+function renderP2Hotels(trip) {
+  const wrap = document.getElementById('p2-hotel-list')
+  wrap.innerHTML = ''
+  const hotels = trip.hotels || []
+
+  hotels.forEach((hotel, idx) => {
+    const row = document.createElement('div')
+    row.className = 'hotel-row'
+    row.innerHTML = `
+      <div class="hotel-row-top">
+        <input type="text" class="h-name" placeholder="구글맵 링크 또는 호텔 이름" value="${hotel.input || ''}"/>
+        <button type="button" class="hotel-del">제거</button>
+      </div>
+      <div class="hotel-dates">
+        <input type="date" class="h-checkin" value="${hotel.checkin || ''}"/>
+        <input type="date" class="h-checkout" value="${hotel.checkout || ''}"/>
+      </div>
+      ${hotel.name ? `<div class="hotel-resolved">✓ ${hotel.name}</div>` : ''}`
+
+    row.querySelector('.h-name').onchange = async e => {
+      const val = e.target.value.trim()
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      t.hotels[idx].input = val
+      t.hotels[idx].name = null
+      t.hotels[idx].lat = null
+      t.hotels[idx].lng = null
+      DB.save(list)
+      await resolveHotel(trip.id, idx)
+      renderP2(); renderP3IfActive()
+    }
+    row.querySelector('.h-checkin').onchange = e => {
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      t.hotels[idx].checkin = e.target.value
+      DB.save(list)
+      renderP2(); renderP3IfActive()
+    }
+    row.querySelector('.h-checkout').onchange = e => {
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      t.hotels[idx].checkout = e.target.value
+      DB.save(list)
+      renderP2(); renderP3IfActive()
+    }
+    row.querySelector('.hotel-del').onclick = () => {
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      t.hotels.splice(idx, 1)
+      DB.save(list)
+      renderP2(); renderP3IfActive()
+    }
+    wrap.appendChild(row)
+  })
+}
+
+function renderP3IfActive() {
+  if (state.page === 'p3') renderP3()
+}
+
+document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
+  const trip = DB.getTrip(state.tripId)
+  if (!trip) return
+  const list = DB.trips
+  const t = list.find(x => x.id === trip.id)
+  t.hotels = t.hotels || []
+  t.hotels.push({ input: '', checkin: '', checkout: '', name: null, lat: null, lng: null })
+  DB.save(list)
+  renderP2()
+})
+
+// 숙소 입력값에서 이름/좌표 추출
+async function resolveHotel(tripId, idx) {
+  const list = DB.trips
+  const t = list.find(x => x.id === tripId)
+  const hotel = t.hotels[idx]
+  if (!hotel || !hotel.input) return
+  let raw = hotel.input
+  try {
+    if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
+      const expanded = await expandShortUrl(raw)
+      if (expanded) raw = expanded
+    }
+    let coords = null
+    if (raw.startsWith('http')) {
+      const m = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/) || raw.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/)
+      if (m) coords = { lat: parseFloat(m[1]), lng: parseFloat(m[2]) }
+      const pnM = raw.match(/\/place\/([^/@?+]+)/)
+      if (pnM) hotel.name = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
+      else hotel.name = hotel.name || '숙소'
+      if (coords) { hotel.lat = coords.lat; hotel.lng = coords.lng }
+    } else {
+      hotel.name = raw
+    }
+  } catch (e) {
+    hotel.name = hotel.name || raw
+  }
+  DB.save(list)
 }
 
 function getHotelForDate(trip, date, position) {
@@ -1104,8 +1217,6 @@ function openTripModal(editId) {
   // 현재 사진 상태 (메모리에서 관리, 저장 시점에 trip에 적용)
   let photo1 = trip ? (trip.photo1 || null) : null
   let photo2 = trip ? (trip.photo2 || null) : null
-  // 숙소 목록 (메모리에서 관리)
-  let hotels = trip && trip.hotels ? JSON.parse(JSON.stringify(trip.hotels)) : []
 
   modal.innerHTML = `<div class="mbox">
     <div class="mhd">
@@ -1137,12 +1248,6 @@ function openTripModal(editId) {
       <div class="mfield">
         <span class="mlbl">같이 간 사람</span>
         <input class="min" id="f-companions" value="${trip ? trip.companions || '' : ''}" placeholder="혼자 / 홍길동"/>
-      </div>
-      <div class="mfield">
-        <span class="mlbl">🏨 숙소</span>
-        <span class="mhint">구글맵 링크 또는 이름 + 체크인/체크아웃 날짜. 해당 기간의 Day 일정 첫/끝에 자동으로 표시됩니다.</span>
-        <div class="hotel-list" id="hotel-list"></div>
-        <button type="button" class="hotel-add" id="hotel-add">+ 숙소 추가</button>
       </div>
       <div class="mfield">
         <span class="mlbl">사진 1 — 카드 중간 왼쪽 (둥근 프레임)</span>
@@ -1215,35 +1320,6 @@ function openTripModal(editId) {
     document.getElementById('del-p2').style.display = 'none'
   }
 
-  // ── 숙소 목록 렌더링 ──
-  function renderHotelList() {
-    const wrap = document.getElementById('hotel-list')
-    wrap.innerHTML = ''
-    hotels.forEach((hotel, idx) => {
-      const row = document.createElement('div')
-      row.className = 'hotel-row'
-      row.innerHTML = `
-        <div class="hotel-row-top">
-          <input type="text" class="h-name" placeholder="구글맵 링크 또는 호텔 이름" value="${hotel.input || ''}"/>
-          <button type="button" class="hotel-del">제거</button>
-        </div>
-        <div class="hotel-dates">
-          <input type="date" class="h-checkin" value="${hotel.checkin || ''}"/>
-          <input type="date" class="h-checkout" value="${hotel.checkout || ''}"/>
-        </div>`
-      row.querySelector('.h-name').onchange = e => { hotels[idx].input = e.target.value.trim(); hotels[idx].name = null; hotels[idx].lat = null; hotels[idx].lng = null }
-      row.querySelector('.h-checkin').onchange = e => { hotels[idx].checkin = e.target.value }
-      row.querySelector('.h-checkout').onchange = e => { hotels[idx].checkout = e.target.value }
-      row.querySelector('.hotel-del').onclick = () => { hotels.splice(idx, 1); renderHotelList() }
-      wrap.appendChild(row)
-    })
-  }
-  renderHotelList()
-  document.getElementById('hotel-add').onclick = () => {
-    hotels.push({ input: '', checkin: '', checkout: '', name: null, lat: null, lng: null })
-    renderHotelList()
-  }
-
   document.getElementById('btn-save').onclick = async () => {
     const name = document.getElementById('f-name').value.trim()
     if (!name) { alert('여행 이름을 입력해주세요'); return }
@@ -1251,32 +1327,6 @@ function openTripModal(editId) {
     const saveBtn = document.getElementById('btn-save')
     saveBtn.textContent = '저장 중…'
     saveBtn.disabled = true
-
-    // 숙소별로 이름/좌표 추출 (입력값이 변경된 경우에만)
-    for (const hotel of hotels) {
-      if (!hotel.input) continue
-      if (hotel.name && hotel.lat) continue // 이미 처리됨
-      let raw = hotel.input
-      try {
-        if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
-          const expanded = await expandShortUrl(raw)
-          if (expanded) raw = expanded
-        }
-        let coords = null
-        if (raw.startsWith('http')) {
-          const m = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/) || raw.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/)
-          if (m) coords = { lat: parseFloat(m[1]), lng: parseFloat(m[2]) }
-          const pnM = raw.match(/\/place\/([^/@?+]+)/)
-          if (pnM) hotel.name = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
-          else hotel.name = hotel.name || '숙소'
-          if (coords) { hotel.lat = coords.lat; hotel.lng = coords.lng }
-        } else {
-          hotel.name = raw
-        }
-      } catch (e) {
-        hotel.name = hotel.name || raw
-      }
-    }
 
     const data = {
       name,
@@ -1287,7 +1337,6 @@ function openTripModal(editId) {
       companions:  document.getElementById('f-companions').value.trim(),
       photo1,
       photo2,
-      hotels: hotels.filter(h => h.input),
     }
 
     try {
