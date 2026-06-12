@@ -182,12 +182,17 @@ button{cursor:pointer}
 .hotel-marker-text{font-size:11px;color:#555;letter-spacing:.02em}
 .hotel-marker-name{font-weight:700;color:#000}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 
 <nav class="nav">
   <span class="nav-logo" id="nav-logo">MY TRAVELS</span>
-  <button id="nav-back">← 뒤로</button>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span id="auth-status" style="font-size:9px;color:#888;letter-spacing:.05em"></span>
+    <button id="auth-btn" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 10px;color:#888">로그인</button>
+    <button id="nav-back">← 뒤로</button>
+  </div>
 </nav>
 
 <div id="p1" class="page active">
@@ -248,6 +253,14 @@ button{cursor:pointer}
 /* =========================================================
    STORE
    ========================================================= */
+// ── Supabase 설정 ──
+const SUPABASE_URL = 'https://fwtutrrpfqqcbsjykiqu.supabase.co'
+const SUPABASE_KEY = 'sb_publishable_kl-D0zYQOa883uc5siG6mA_HUt0D5km'
+const supa = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null
+
+let currentUser = null
+let syncTimer = null
+
 const DB = {
   get trips() {
     try { return JSON.parse(localStorage.getItem('mt_trips') || '[]') } catch { return [] }
@@ -258,6 +271,11 @@ const DB = {
     } catch (e) {
       console.error('저장 실패:', e)
       throw e
+    }
+    // 로그인 상태면 Supabase에도 디바운스 동기화
+    if (currentUser) {
+      clearTimeout(syncTimer)
+      syncTimer = setTimeout(() => syncToSupabase(t), 800)
     }
   },
 
@@ -1644,11 +1662,132 @@ function closeModal() {
 /* =========================================================
    INIT
    ========================================================= */
+// ── Supabase 동기화 ──
+async function syncToSupabase(trips) {
+  if (!supa || !currentUser) return
+  try {
+    await supa.from('trips_data').upsert({ user_id: currentUser.id, data: trips, updated_at: new Date().toISOString() })
+  } catch (e) {
+    console.error('동기화 실패:', e)
+  }
+}
+
+async function loadFromSupabase() {
+  if (!supa || !currentUser) return
+  try {
+    const { data, error } = await supa.from('trips_data').select('data').eq('user_id', currentUser.id).maybeSingle()
+    if (error) { console.error('불러오기 실패:', error); return }
+    if (data && data.data) {
+      // 서버 데이터가 있으면 그것으로 덮어씀 (다른 기기에서 작업한 최신 데이터)
+      localStorage.setItem('mt_trips', JSON.stringify(data.data))
+    } else {
+      // 서버에 데이터 없음 — 로컬 데이터를 첫 업로드 (마이그레이션)
+      const local = DB.trips
+      if (local.length) await syncToSupabase(local)
+    }
+  } catch (e) {
+    console.error('불러오기 오류:', e)
+  }
+}
+
+function updateAuthUI() {
+  const statusEl = document.getElementById('auth-status')
+  const btnEl = document.getElementById('auth-btn')
+  if (currentUser) {
+    statusEl.textContent = currentUser.email
+    btnEl.textContent = '로그아웃'
+  } else {
+    statusEl.textContent = ''
+    btnEl.textContent = '로그인'
+  }
+}
+
+function openAuthModal() {
+  const modal = document.getElementById('modal')
+  modal.innerHTML = `<div class="mbox" style="max-width:340px">
+    <div class="mhd">
+      <span>[ 로그인 / 회원가입 ]</span>
+      <button class="mclose" onclick="closeModal()">×</button>
+    </div>
+    <div class="mbody">
+      <div class="mfield">
+        <span class="mlbl">이메일</span>
+        <input class="min" id="auth-email" type="email" placeholder="you@example.com"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">비밀번호</span>
+        <input class="min" id="auth-pw" type="password" placeholder="6자 이상"/>
+      </div>
+      <div id="auth-msg" style="font-size:10px;color:#c00"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="auth-login" class="hotel-done" style="flex:1">로그인</button>
+        <button id="auth-signup" class="hotel-retry" style="flex:1">회원가입</button>
+      </div>
+    </div>
+  </div>`
+  modal.style.display = 'flex'
+
+  const msg = document.getElementById('auth-msg')
+  document.getElementById('auth-login').onclick = async () => {
+    const email = document.getElementById('auth-email').value.trim()
+    const password = document.getElementById('auth-pw').value
+    msg.textContent = '로그인 중…'
+    const { data, error } = await supa.auth.signInWithPassword({ email, password })
+    if (error) { msg.textContent = error.message; return }
+    currentUser = data.user
+    await loadFromSupabase()
+    updateAuthUI()
+    closeModal()
+    renderPage()
+  }
+  document.getElementById('auth-signup').onclick = async () => {
+    const email = document.getElementById('auth-email').value.trim()
+    const password = document.getElementById('auth-pw').value
+    if (password.length < 6) { msg.textContent = '비밀번호는 6자 이상이어야 해요'; return }
+    msg.textContent = '가입 중…'
+    const { data, error } = await supa.auth.signUp({ email, password })
+    if (error) { msg.textContent = error.message; return }
+    if (data.user && !data.session) {
+      msg.textContent = '인증 이메일을 보냈어요. 메일함을 확인해주세요!'
+    } else {
+      currentUser = data.user
+      await loadFromSupabase()
+      updateAuthUI()
+      closeModal()
+      renderPage()
+    }
+  }
+}
+
+document.getElementById('auth-btn')?.addEventListener('click', async () => {
+  if (currentUser) {
+    if (confirm('로그아웃 하시겠어요?')) {
+      await supa.auth.signOut()
+      currentUser = null
+      updateAuthUI()
+    }
+  } else {
+    openAuthModal()
+  }
+})
+
+async function initAuth() {
+  if (!supa) return
+  const { data } = await supa.auth.getSession()
+  if (data.session) {
+    currentUser = data.session.user
+    await loadFromSupabase()
+    updateAuthUI()
+    renderPage()
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   renderPage()
   document.getElementById('modal').addEventListener('click', e => {
     if (e.target.id === 'modal') closeModal()
   })
+  initAuth()
 })
 </script>
 
