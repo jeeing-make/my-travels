@@ -162,6 +162,9 @@ button{cursor:pointer}
 .hotel-edit:hover{border-color:#000;color:#000}
 .hotel-done{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:6px 10px;color:#000;align-self:flex-start}
 .hotel-done:hover{background:#000;color:#fff}
+.hotel-retry{font-size:9px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 10px;color:#888}
+.hotel-retry:hover:not(:disabled){border-color:#000;color:#000}
+.hotel-retry:disabled{opacity:.4}
 .hotel-row{border:.5px solid #ddd;padding:10px;display:flex;flex-direction:column;gap:6px}
 .hotel-row-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .hotel-row-top input{font-size:11px;border:.5px solid #ddd;padding:6px 8px;outline:none;flex:1;color:#000;background:#fff}
@@ -666,16 +669,6 @@ function renderP3() {
   document.getElementById('p3-ey').textContent = `[ Day ${dayIdx + 1} ] — ${cleanName(trip.name)}`
   document.getElementById('p3-ti').textContent = dateObj ? `${MON[dateObj.getMonth()]}\n${dateObj.getDate()}.` : ''
 
-  // 임시 디버그 패널
-  let dbg = document.getElementById('debug-panel')
-  if (!dbg) {
-    dbg = document.createElement('div')
-    dbg.id = 'debug-panel'
-    dbg.style = 'font-size:9px;color:#c00;background:#fff3f3;padding:8px 16px;border-bottom:1px solid #c00;white-space:pre-wrap;word-break:break-all'
-    document.getElementById('p3').insertBefore(dbg, document.getElementById('p3-places'))
-  }
-  dbg.textContent = `[DEBUG] trip.lat=${trip.lat} trip.lon=${trip.lon} | day.date=${day.date} | day.weather=${JSON.stringify(day.weather)} | hotels=${JSON.stringify(trip.hotels)}`
-
   const oi = document.getElementById('outfit-in')
   oi.value = day.outfit || ''
   oi.onchange = () => DB.updateDay(state.tripId, state.dayId, { outfit: oi.value })
@@ -744,8 +737,11 @@ function renderP2Hotels(trip) {
           <input type="date" class="h-checkin" value="${hotel.checkin || ''}"/>
           <input type="date" class="h-checkout" value="${hotel.checkout || ''}"/>
         </div>
-        ${hotel.name ? `<div class="hotel-resolved">✓ ${hotel.name}</div>` : ''}
-        <button type="button" class="hotel-done">완료</button>`
+        ${hotel.name ? `<div class="hotel-resolved">✓ ${hotel.name}${hotel.lat == null ? ' (좌표 없음)' : ''}</div>` : ''}
+        <div style="display:flex;gap:8px">
+          <button type="button" class="hotel-done">완료</button>
+          ${hotel.input ? `<button type="button" class="hotel-retry">위치 다시 찾기</button>` : ''}
+        </div>`
 
       row.querySelector('.h-name').onchange = async e => {
         const val = e.target.value.trim()
@@ -779,6 +775,15 @@ function renderP2Hotels(trip) {
         delete t.hotels[idx]._editing
         DB.save(list)
         renderP2()
+      }
+      const retryBtn = row.querySelector('.hotel-retry')
+      if (retryBtn) {
+        retryBtn.onclick = async () => {
+          retryBtn.textContent = '찾는 중…'
+          retryBtn.disabled = true
+          await resolveHotel(trip.id, idx)
+          renderP2(); renderP3IfActive()
+        }
       }
     }
 
@@ -835,11 +840,25 @@ async function resolveHotel(tripId, idx) {
       if (m) coords = { lat: parseFloat(m[1]), lng: parseFloat(m[2]) }
       const pnM = raw.match(/\/place\/([^/@?+]+)/)
       if (pnM) hotel.name = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
-      else hotel.name = hotel.name || '숙소'
       if (coords) { hotel.lat = coords.lat; hotel.lng = coords.lng }
     } else {
       hotel.name = raw
     }
+
+    // 좌표를 못 얻었으면 이름으로 Places 검색해서 좌표 보강
+    if (hotel.lat == null && typeof google !== 'undefined' && google.maps && google.maps.places) {
+      const searchTerm = hotel.name && hotel.name !== '숙소' ? hotel.name : (raw.startsWith('http') ? null : raw)
+      if (searchTerm) {
+        const detail = await queryPlaces(searchTerm)
+        if (detail) {
+          hotel.name = detail.name || hotel.name
+          hotel.lat = detail.lat
+          hotel.lng = detail.lng
+        }
+      }
+    }
+
+    if (!hotel.name) hotel.name = '숙소'
   } catch (e) {
     hotel.name = hotel.name || raw
   }
@@ -880,7 +899,7 @@ function createDirBar(from, to, dirInfo, onResolved, label) {
   if (!dirInfo.dirDuration && hasCoords && typeof google !== 'undefined' && google.maps) {
     bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
     calcDir(from, to).then(dir => {
-      if (dir && onResolved) onResolved(dir)
+      if (onResolved) onResolved(dir || { mode: 'walking', dur: '정보 없음', dist: '' })
     })
   } else {
     const dur = dirInfo.dirDuration || '—'
@@ -1099,6 +1118,20 @@ async function doAddPlace() {
 }
 
 // 좌표만 있을 때 — Geocoding API로 장소명 역추적
+// trip.lat/lon이 없으면 주어진 좌표로 채우고 날씨 갱신
+function ensureTripLatLon(lat, lng) {
+  if (lat == null || lng == null) return
+  const trip = DB.getTrip(state.tripId)
+  if (!trip || trip.lat != null) return
+  DB.updateTrip(state.tripId, { lat, lon: lng })
+  const day = DB.getTrip(state.tripId).days.find(d => d.id === state.dayId)
+  if (day && !day.weather && day.date) {
+    fetchWeather(lat, lng, day.date).then(w => {
+      if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); applyWeather(w) }
+    })
+  }
+}
+
 async function savePlaceByCoords(coords) {
   let place = { name: '핀 위치 (' + coords.lat.toFixed(4) + ', ' + coords.lng.toFixed(4) + ')', category: 'attraction', hours: '', isOpen: null, memo: '', lat: coords.lat, lng: coords.lng }
   try {
@@ -1162,13 +1195,16 @@ async function savePlace(nameOrId, coords) {
     console.warn('Places API 실패, 이름으로만 저장:', e)
   }
 
+  if (place.lat != null) ensureTripLatLon(place.lat, place.lng)
+
   try {
     const trip = DB.getTrip(state.tripId)
     const day = trip.days.find(d => d.id === state.dayId)
     const prev = (day.places || []).slice(-1)[0]
-    if (prev && prev.lat && place.lat && typeof google !== 'undefined' && google.maps) {
+    if (prev && prev.lat != null && place.lat != null && typeof google !== 'undefined' && google.maps) {
       const dir = await calcDir(prev, place)
       if (dir) { place.dirMode = dir.mode; place.dirDuration = dir.dur; place.dirDistance = dir.dist }
+      else { place.dirMode = 'walking'; place.dirDuration = '정보 없음'; place.dirDistance = '' }
     }
   } catch (e) {
     console.warn('Directions 계산 실패:', e)
