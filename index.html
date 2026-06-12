@@ -700,11 +700,11 @@ async function doAddPlace() {
     // place_id 또는 이름 추출
     let target = raw
     if (raw.startsWith('http')) {
-      const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]+)/) || raw.match(/!1s(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)/)
+      const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]{15,})/)
       const pnM  = raw.match(/\/place\/([^/@?+]+)/)
       const pqM  = raw.match(/[?&]q=([^&]+)/)
-      if (pidM)      target = pidM[1]
-      else if (pnM)  target = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
+      if (pnM)       target = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
+      else if (pidM) target = pidM[1]
       else if (pqM)  target = decodeURIComponent(pqM[1].replace(/\+/g, ' '))
       else if (coords) {
         // 좌표는 있지만 이름을 못 찾으면 좌표 기반 역지오코딩 시도
@@ -779,8 +779,11 @@ async function savePlace(nameOrId, coords) {
       const detail = await queryPlaces(nameOrId)
       if (detail) {
         place = Object.assign(place, detail)
-        // URL에서 얻은 좌표가 더 정확하면 우선 사용
         if (coords) { place.lat = coords.lat; place.lng = coords.lng }
+      } else if (coords) {
+        // 이름 검색 실패했지만 좌표가 있으면 좌표 근처에서 카테고리/영업시간 보강 시도
+        const nearby = await queryPlacesNearby(nameOrId, coords)
+        if (nearby) place = Object.assign(place, nearby, { lat: coords.lat, lng: coords.lng })
       }
     } else {
       console.warn('Google Maps API 로드 안됨 — 이름으로만 저장')
@@ -875,6 +878,36 @@ function queryPlaces(input) {
         }
       )
     }
+  })
+}
+
+function queryPlacesNearby(name, coords) {
+  return new Promise(resolve => {
+    let done = false
+    const finish = v => { if (!done) { done = true; resolve(v) } }
+    const timeout = setTimeout(() => finish(null), 5000)
+
+    const svc = new google.maps.places.PlacesService(document.createElement('div'))
+    svc.findPlaceFromQuery(
+      {
+        query: name,
+        fields: ['place_id', 'name', 'geometry'],
+        locationBias: new google.maps.Circle({ center: coords, radius: 200 })
+      },
+      (res, s) => {
+        console.log('findPlaceFromQuery(nearby) 상태:', s, '결과:', res)
+        if (s === 'OK' && res && res[0]) {
+          svc.getDetails(
+            { placeId: res[0].place_id, fields: ['name', 'types', 'opening_hours', 'geometry', 'business_status'] },
+            (r, s2) => {
+              clearTimeout(timeout)
+              if (s2 === 'OK') finish(parsePlaceResult(r))
+              else finish(null)
+            }
+          )
+        } else { clearTimeout(timeout); finish(null) }
+      }
+    )
   })
 }
 
