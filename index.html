@@ -617,26 +617,51 @@ function renderPlaces() {
 /* =========================================================
    장소 추가
    ========================================================= */
+// 단축 URL(maps.app.goo.gl)을 실제 URL로 펼침 — CORS 우회 프록시 사용
+async function expandShortUrl(url) {
+  try {
+    const proxyUrl = 'https://corsproxy.io/?url=' + encodeURIComponent(url)
+    const res = await fetch(proxyUrl, { redirect: 'follow' })
+    const finalUrl = res.url || url
+    if (finalUrl && finalUrl !== proxyUrl) return finalUrl
+    // 프록시가 최종 URL을 안 주면 body에서 추출 시도
+    const text = await res.text()
+    const m = text.match(/https:\/\/www\.google\.com\/maps[^"'\s]+/)
+    if (m) return m[0]
+  } catch (e) {
+    console.warn('단축 URL 펼치기 실패:', e)
+  }
+  return null
+}
+
 async function doAddPlace() {
   const inp = document.getElementById('place-in')
   const btn = document.getElementById('place-btn')
-  const raw = inp.value.trim()
+  let raw = inp.value.trim()
   if (!raw) return
 
   btn.textContent = '불러오는 중…'
   btn.disabled = true
 
   try {
+    // 단축 URL이면 먼저 펼치기
+    if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
+      const expanded = await expandShortUrl(raw)
+      if (expanded) raw = expanded
+    }
+
+    // 좌표 추출 (날씨용 + 장소 lat/lng)
+    let coords = null
     if (raw.startsWith('http')) {
-      const coordMatch = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/)
+      const coordMatch = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/) || raw.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/)
       if (coordMatch) {
-        const lat = parseFloat(coordMatch[1]), lon = parseFloat(coordMatch[2])
+        coords = { lat: parseFloat(coordMatch[1]), lng: parseFloat(coordMatch[2]) }
         const trip = DB.getTrip(state.tripId)
         if (!trip.lat) {
-          DB.updateTrip(state.tripId, { lat, lon })
+          DB.updateTrip(state.tripId, { lat: coords.lat, lon: coords.lng })
           const day = DB.getTrip(state.tripId).days.find(d => d.id === state.dayId)
           if (!day.weather && day.date) {
-            fetchWeather(lat, lon, day.date).then(w => {
+            fetchWeather(coords.lat, coords.lng, day.date).then(w => {
               if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); applyWeather(w) }
             })
           }
@@ -644,15 +669,19 @@ async function doAddPlace() {
       }
     }
 
+    // place_id 또는 이름 추출
     let target = raw
     if (raw.startsWith('http')) {
-      const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]+)/)
+      const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]+)/) || raw.match(/!1s(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)/)
       const pnM  = raw.match(/\/place\/([^/@?+]+)/)
       const pqM  = raw.match(/[?&]q=([^&]+)/)
       if (pidM)      target = pidM[1]
       else if (pnM)  target = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
       else if (pqM)  target = decodeURIComponent(pqM[1].replace(/\+/g, ' '))
-      else {
+      else if (coords) {
+        // 좌표는 있지만 이름을 못 찾으면 좌표 기반 역지오코딩 시도
+        target = null
+      } else {
         btn.textContent = '추가 →'; btn.disabled = false
         inp.value = ''
         openNameModal()
@@ -660,7 +689,13 @@ async function doAddPlace() {
       }
     }
 
-    await savePlace(target)
+    if (target) {
+      await savePlace(target, coords)
+    } else if (coords) {
+      await savePlaceByCoords(coords)
+    } else {
+      await savePlace(raw, coords)
+    }
     inp.value = ''
   } finally {
     btn.textContent = '추가 →'
@@ -668,28 +703,74 @@ async function doAddPlace() {
   }
 }
 
-async function savePlace(nameOrId) {
-  let place = { name: nameOrId, category: 'attraction', hours: '', isOpen: null, memo: '' }
-
-  if (typeof google !== 'undefined' && google.maps && google.maps.places) {
-    try {
-      const detail = await queryPlaces(nameOrId)
-      if (detail) place = detail
-    } catch (e) {
-      console.warn('Places API 실패, 이름으로만 저장:', e)
+// 좌표만 있을 때 — Geocoding API로 장소명 역추적
+async function savePlaceByCoords(coords) {
+  let place = { name: '핀 위치 (' + coords.lat.toFixed(4) + ', ' + coords.lng.toFixed(4) + ')', category: 'attraction', hours: '', isOpen: null, memo: '', lat: coords.lat, lng: coords.lng }
+  try {
+    if (typeof google !== 'undefined' && google.maps) {
+      const geocoder = new google.maps.Geocoder()
+      const result = await new Promise(resolve => {
+        geocoder.geocode({ location: coords }, (results, status) => {
+          if (status === 'OK' && results[0]) resolve(results[0])
+          else resolve(null)
+        })
+      })
+      if (result) {
+        place.name = result.address_components?.[0]?.long_name || result.formatted_address || place.name
+        // place_id로 상세정보 추가 조회
+        if (result.place_id) {
+          const detail = await queryPlaces(result.place_id)
+          if (detail) place = Object.assign(place, detail, { lat: coords.lat, lng: coords.lng })
+        }
+      }
     }
-  } else {
-    console.warn('Google Maps API 로드 안됨 — 이름으로만 저장')
+  } catch (e) {
+    console.warn('좌표 역지오코딩 실패:', e)
   }
 
-  const trip = DB.getTrip(state.tripId)
-  const day = trip.days.find(d => d.id === state.dayId)
-  const prev = (day.places || []).slice(-1)[0]
-  if (prev && prev.lat && place.lat && typeof google !== 'undefined' && google.maps) {
-    try {
+  try {
+    const trip = DB.getTrip(state.tripId)
+    const day = trip.days.find(d => d.id === state.dayId)
+    const prev = (day.places || []).slice(-1)[0]
+    if (prev && prev.lat && place.lat && typeof google !== 'undefined' && google.maps) {
       const dir = await calcDir(prev, place)
       if (dir) { place.dirMode = dir.mode; place.dirDuration = dir.dur; place.dirDistance = dir.dist }
-    } catch (e) {}
+    }
+  } catch (e) {}
+
+  DB.addPlace(state.tripId, state.dayId, place)
+  renderPlaces()
+}
+
+async function savePlace(nameOrId, coords) {
+  let place = { name: nameOrId, category: 'attraction', hours: '', isOpen: null, memo: '' }
+  if (coords) { place.lat = coords.lat; place.lng = coords.lng }
+
+  try {
+    if (typeof google !== 'undefined' && google.maps && google.maps.places) {
+      const detail = await queryPlaces(nameOrId)
+      if (detail) {
+        place = Object.assign(place, detail)
+        // URL에서 얻은 좌표가 더 정확하면 우선 사용
+        if (coords) { place.lat = coords.lat; place.lng = coords.lng }
+      }
+    } else {
+      console.warn('Google Maps API 로드 안됨 — 이름으로만 저장')
+    }
+  } catch (e) {
+    console.warn('Places API 실패, 이름으로만 저장:', e)
+  }
+
+  try {
+    const trip = DB.getTrip(state.tripId)
+    const day = trip.days.find(d => d.id === state.dayId)
+    const prev = (day.places || []).slice(-1)[0]
+    if (prev && prev.lat && place.lat && typeof google !== 'undefined' && google.maps) {
+      const dir = await calcDir(prev, place)
+      if (dir) { place.dirMode = dir.mode; place.dirDuration = dir.dur; place.dirDistance = dir.dist }
+    }
+  } catch (e) {
+    console.warn('Directions 계산 실패:', e)
   }
 
   DB.addPlace(state.tripId, state.dayId, place)
@@ -717,8 +798,16 @@ function openNameModal() {
   const go = async () => {
     const v = document.getElementById('name-in').value.trim()
     if (!v) return
-    closeModal()
-    await savePlace(v)
+    const okBtn = document.getElementById('name-ok')
+    okBtn.textContent = '추가 중…'
+    okBtn.disabled = true
+    try {
+      await savePlace(v)
+    } catch (e) {
+      console.error('장소 추가 오류:', e)
+    } finally {
+      closeModal()
+    }
   }
   document.getElementById('name-ok').onclick = go
   document.getElementById('name-in').onkeydown = e => { if (e.key === 'Enter') go() }
