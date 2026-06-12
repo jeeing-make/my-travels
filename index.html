@@ -538,8 +538,8 @@ function renderP2() {
       ? (day.places || []).map(p => `<span class="rstop">${CAT[p.category]?.e || '📍'} ${p.name}</span><span class="rarr">→</span>`).join('').replace(/<span class="rarr">→<\/span>$/, '')
       : '<span style="font-size:9px;color:#ccc;letter-spacing:.08em;text-transform:uppercase">장소 없음</span>'
 
-    // 숙소(hotel) 포함 여부
-    const hasHotel = (day.places || []).some(p => p.category === 'hotel')
+    // 숙소(hotel) 포함 여부 — trip.hotels 기반
+    const hasHotel = !!(getHotelForDate(trip, day.date, 'start') || getHotelForDate(trip, day.date, 'end'))
     const hotelIcon = hasHotel ? ' 🏨' : ''
 
     row.innerHTML = `
@@ -886,14 +886,17 @@ async function savePlace(nameOrId, coords) {
 
   try {
     if (typeof google !== 'undefined' && google.maps && google.maps.places) {
-      const detail = await queryPlaces(nameOrId)
+      let detail = null
+      if (coords) {
+        // 좌표가 있으면 좌표 주변에서 우선 검색 (동명의 다른 지점 매칭 방지)
+        detail = await queryPlacesNearby(nameOrId, coords)
+      }
+      if (!detail) {
+        detail = await queryPlaces(nameOrId)
+      }
       if (detail) {
         place = Object.assign(place, detail)
         if (coords) { place.lat = coords.lat; place.lng = coords.lng }
-      } else if (coords) {
-        // 이름 검색 실패했지만 좌표가 있으면 좌표 근처에서 카테고리/영업시간 보강 시도
-        const nearby = await queryPlacesNearby(nameOrId, coords)
-        if (nearby) place = Object.assign(place, nearby, { lat: coords.lat, lng: coords.lng })
       }
     } else {
       console.warn('Google Maps API 로드 안됨 — 이름으로만 저장')
@@ -1000,7 +1003,7 @@ function queryPlacesNearby(name, coords) {
       {
         query: name,
         fields: ['place_id', 'name', 'geometry'],
-        locationBias: new google.maps.Circle({ center: coords, radius: 200 })
+        locationBias: new google.maps.Circle({ center: coords, radius: 300 })
       },
       (res, s) => {
         if (s === 'OK' && res && res[0]) {
@@ -1038,7 +1041,7 @@ function calcDir(origin, dest) {
   return new Promise(resolve => {
     let done = false
     const finish = v => { if (!done) { done = true; resolve(v) } }
-    setTimeout(() => finish(null), 5000)
+    setTimeout(() => finish(null), 3000)
     const svc = new google.maps.DirectionsService()
     svc.route(
       { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'WALKING' },
