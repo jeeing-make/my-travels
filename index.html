@@ -319,7 +319,11 @@ const DB = {
     const existing = new Set(trip.days.map(d => d.date))
     const start = new Date(trip.dateStart)
     const end = new Date(trip.dateEnd)
-    if (isNaN(start) || isNaN(end) || start > end) return
+    if (isNaN(start) || isNaN(end)) return
+    if (start > end) {
+      console.warn('ensureDaysForRange: dateStart가 dateEnd보다 늦어요', trip.dateStart, trip.dateEnd)
+      return
+    }
     let added = false
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().slice(0, 10)
