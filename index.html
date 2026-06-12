@@ -75,6 +75,20 @@ button{cursor:pointer}
 .rmenubtn{font-size:12px;color:#ccc;background:none;border:none;padding:0 6px;line-height:1}
 .rmenubtn:hover{color:#000}
 .rmenu{display:flex;gap:5px;align-items:center}
+.hotel-menu{margin-left:8px}
+.hotel-redate,.h-redate-ok{font-size:9px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:4px 8px;color:#888}
+.hotel-redate:hover,.h-redate-ok:hover{border-color:#000;color:#000}
+.user-avatar{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#000;color:#fff;font-size:10px;font-weight:700;letter-spacing:0;cursor:default}
+
+/* 교통편 */
+.transport-mode-pick{display:flex;gap:6px}
+.tmode-btn{font-size:11px;border:.5px solid #ddd;background:#fff;padding:8px 12px;color:#888;flex:1}
+.tmode-btn.active{border-color:#000;color:#000;font-weight:700;background:#f5f5f5}
+.transport-card{padding:14px 20px;background:#f5f0ea;display:flex;align-items:center;gap:12px;border-bottom:.5px solid #ddd}
+.transport-icon{font-size:20px;flex-shrink:0}
+.transport-info{flex:1;min-width:0}
+.transport-route{font-size:12px;font-weight:700;color:#3a2f28}
+.transport-meta{font-size:9px;color:#9a8a7a;margin-top:2px}
 .rdate-row{display:flex;align-items:center;gap:4px}
 .rweekday{color:#aaa;font-weight:400}
 .rday-total{font-size:9px;color:#888;margin-left:auto;font-weight:700}
@@ -171,7 +185,7 @@ button{cursor:pointer}
 .hotel-section-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#000;font-weight:500}
 .hotel-section-hint{font-size:8px;color:#aaa;line-height:1.5}
 .hotel-resolved{font-size:9px;color:#0a0;letter-spacing:.02em}
-.hotel-summary{display:flex;align-items:center;gap:10px;border:.5px solid #ddd;padding:8px 10px}
+.hotel-summary{display:flex;align-items:center;gap:10px;border:.5px solid #ddd;padding:8px 10px;flex-wrap:wrap}
 .hotel-summary-icon{font-size:16px;flex-shrink:0}
 .hotel-summary-text{flex:1;display:flex;flex-direction:column;gap:2px}
 .hotel-summary-name{font-size:11px;font-weight:700;color:#000}
@@ -861,7 +875,11 @@ function renderP2Hotels(trip) {
             <div class="hotel-summary-dates">${hotel.checkin || '?'} → ${hotel.checkout || '?'}${hotel.address ? ' · ' + shortAddress(hotel.address) : ''}</div>
           </div>
           <button type="button" class="hotel-edit">수정</button>
-          <button type="button" class="hotel-del">제거</button>
+          <button type="button" class="rmenubtn hotel-menu-btn">⋮</button>
+          <div class="rmenu hotel-menu" style="display:none">
+            <button type="button" class="hotel-redate">날짜 변경</button>
+            <button type="button" class="hotel-del">삭제</button>
+          </div>
         </div>`
       row.querySelector('.hotel-edit').onclick = () => {
         const list = DB.trips
@@ -870,6 +888,28 @@ function renderP2Hotels(trip) {
         if (h) h._editing = true
         DB.save(list)
         renderP2()
+      }
+      row.querySelector('.hotel-menu-btn').onclick = () => {
+        const menu = row.querySelector('.hotel-menu')
+        menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'
+      }
+      row.querySelector('.hotel-redate').onclick = () => {
+        const menu = row.querySelector('.hotel-menu')
+        menu.innerHTML = `
+          <span style="font-size:9px;color:#888">체크인</span>
+          <input type="date" class="h-redate-in" value="${hotel.checkin || ''}" style="font-size:10px;border:.5px solid #ddd;padding:3px 5px"/>
+          <span style="font-size:9px;color:#888">체크아웃</span>
+          <input type="date" class="h-redate-out" value="${hotel.checkout || ''}" style="font-size:10px;border:.5px solid #ddd;padding:3px 5px"/>
+          <button type="button" class="h-redate-ok">완료</button>`
+        menu.querySelector('.h-redate-ok').onclick = () => {
+          const list = DB.trips
+          const t = list.find(x => x.id === trip.id)
+          const h = t.hotels.find(x => x.id === hotel.id)
+          h.checkin = menu.querySelector('.h-redate-in').value
+          h.checkout = menu.querySelector('.h-redate-out').value
+          DB.save(list)
+          renderP2(); renderP3IfActive()
+        }
       }
     } else {
       // 펼친 상태 — 입력 폼
@@ -985,13 +1025,24 @@ function renderP2Flights(trip) {
         renderP2()
       }
     } else {
+      const mode = flight.mode || 'flight'
+      const modeLabel = { flight: '✈️ 비행기', train: '🚄 기차', car: '🚗 자동차' }
+      const fromLabel = mode === 'flight' ? '출발 공항' : '출발지'
+      const toLabel = mode === 'flight' ? '도착 공항' : '도착지'
       row.innerHTML = `
         <div class="hotel-row-top">
-          <span style="font-size:11px;font-weight:700">🛫 출발</span>
+          <div class="transport-mode-pick" style="flex:1">
+            <button type="button" class="tmode-btn ${mode === 'flight' ? 'active' : ''}" data-mode="flight">✈️ 비행기</button>
+            <button type="button" class="tmode-btn ${mode === 'train' ? 'active' : ''}" data-mode="train">🚄 기차</button>
+            <button type="button" class="tmode-btn ${mode === 'car' ? 'active' : ''}" data-mode="car">🚗 자동차</button>
+          </div>
           <button type="button" class="hotel-del">제거</button>
         </div>
         <div class="hotel-row-top">
-          <input type="text" class="f-dep-name" placeholder="출발 공항 (예: 인천국제공항)" value="${flight.depInput || ''}"/>
+          <span style="font-size:11px;font-weight:700">🛫 출발</span>
+        </div>
+        <div class="hotel-row-top">
+          <input type="text" class="f-dep-name" placeholder="${fromLabel} (예: 인천국제공항)" value="${flight.depInput || ''}"/>
         </div>
         <div class="hotel-row-top">
           <input type="text" class="f-dep-city" placeholder="표시될 도시명 (예: Seoul) — 비워두면 자동검색" value="${flight.depCity || ''}"/>
@@ -1004,7 +1055,7 @@ function renderP2Flights(trip) {
           <span style="font-size:11px;font-weight:700">🛬 도착</span>
         </div>
         <div class="hotel-row-top">
-          <input type="text" class="f-arr-name" placeholder="도착 공항 (예: 나리타국제공항)" value="${flight.arrInput || ''}"/>
+          <input type="text" class="f-arr-name" placeholder="${toLabel} (예: 나리타국제공항)" value="${flight.arrInput || ''}"/>
         </div>
         <div class="hotel-row-top">
           <input type="text" class="f-arr-city" placeholder="표시될 도시명 (예: Prague) — 비워두면 자동검색" value="${flight.arrCity || ''}"/>
@@ -1016,6 +1067,17 @@ function renderP2Flights(trip) {
         ${flight.depName ? `<div class="hotel-resolved">✓ 출발: ${flight.depName}</div>` : ''}
         ${flight.arrName ? `<div class="hotel-resolved">✓ 도착: ${flight.arrName}</div>` : ''}
         <button type="button" class="hotel-done">완료</button>`
+
+      row.querySelectorAll('.tmode-btn').forEach(b => {
+        b.onclick = () => {
+          const list = DB.trips
+          const t = list.find(x => x.id === trip.id)
+          const f = t.flights.find(x => x.id === flight.id)
+          f.mode = b.dataset.mode
+          DB.save(list)
+          renderP2()
+        }
+      })
 
       const save = (changes) => {
         const list = DB.trips
@@ -1039,8 +1101,8 @@ function renderP2Flights(trip) {
       }
       row.querySelector('.f-dep-city').onchange = e => { save({ depCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
       row.querySelector('.f-arr-city').onchange = e => { save({ arrCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
-      row.querySelector('.f-dep-date').onchange = e => { save({ depDate: e.target.value }); renderP2(); renderP3IfActive() }
-      row.querySelector('.f-dep-time').onchange = e => { save({ depTime: e.target.value }); renderP2(); renderP3IfActive() }
+      row.querySelector('.f-dep-date').onchange = e => { save({ depDate: e.target.value }); syncFlightToPlaces(trip.id, flight.id); renderP2(); renderP3IfActive() }
+      row.querySelector('.f-dep-time').onchange = e => { save({ depTime: e.target.value }); syncFlightToPlaces(trip.id, flight.id); renderP2(); renderP3IfActive() }
       row.querySelector('.f-arr-date').onchange = e => { save({ arrDate: e.target.value }); renderP2(); renderP3IfActive() }
       row.querySelector('.f-arr-time').onchange = e => { save({ arrTime: e.target.value }); renderP2(); renderP3IfActive() }
 
@@ -1055,6 +1117,7 @@ function renderP2Flights(trip) {
         const f2 = t2.flights.find(x => x.id === flight.id)
         delete f2._editing
         DB.save(list2)
+        syncFlightToPlaces(trip.id, flight.id)
         renderP2(); renderP3IfActive()
       }
     }
@@ -1062,6 +1125,12 @@ function renderP2Flights(trip) {
     row.querySelector('.hotel-del').onclick = () => {
       const list = DB.trips
       const t = list.find(x => x.id === trip.id)
+      const f = t.flights.find(x => x.id === flight.id)
+      // places에서도 제거
+      if (f && f.placeRef) {
+        const d = (t.days || []).find(x => x.id === f.placeRef.dayId)
+        if (d) d.places = (d.places || []).filter(p => p.id !== f.placeRef.placeId)
+      }
       t.flights = t.flights.filter(x => x.id !== flight.id)
       DB.save(list)
       renderP2(); renderP3IfActive()
@@ -1071,6 +1140,67 @@ function renderP2Flights(trip) {
 }
 
 // 공항 이름/좌표 자동 검색
+// 교통편(flight) 정보를 출발일 Day의 places에 transport 항목으로 동기화
+// flight.placeRef = { dayId, placeId } 로 추적. 날짜가 바뀌면 기존 위치에서 제거하고 새 날짜 끝에 추가
+function syncFlightToPlaces(tripId, flightId) {
+  const list = DB.trips
+  const t = list.find(x => x.id === tripId)
+  const flight = t.flights.find(x => x.id === flightId)
+  if (!flight) return
+
+  // 기존 위치에서 제거 (같은 날이면 인덱스 기억)
+  let oldIndex = -1
+  if (flight.placeRef) {
+    const oldDay = (t.days || []).find(d => d.id === flight.placeRef.dayId)
+    if (oldDay) {
+      const idx = (oldDay.places || []).findIndex(p => p.id === flight.placeRef.placeId)
+      if (idx >= 0) {
+        if (oldDay.date === flight.depDate) oldIndex = idx
+        oldDay.places.splice(idx, 1)
+      }
+    }
+  }
+
+  // 표시 조건: 이름과 출발일이 있어야 함
+  if (!flight.depName || !flight.arrName || !flight.depDate) {
+    flight.placeRef = null
+    DB.save(list)
+    return
+  }
+
+  const targetDay = (t.days || []).find(d => d.date === flight.depDate)
+  if (!targetDay) {
+    flight.placeRef = null
+    DB.save(list)
+    return
+  }
+
+  const mode = flight.mode || 'flight'
+  const fromDisplay = flight.depCity ? flight.depCity.split(',')[0].trim() : shortPlaceName(flight.depName)
+  const toDisplay = flight.arrCity ? flight.arrCity.split(',')[0].trim() : shortPlaceName(flight.arrName)
+
+  const placeId = 'p_flight_' + flight.id
+  const place = {
+    id: placeId,
+    category: 'transport',
+    transportMode: mode,
+    fromName: fromDisplay,
+    toName: toDisplay,
+    time: flight.depTime || '',
+    memo: '',
+    name: `${fromDisplay} → ${toDisplay}`,
+    _flightId: flight.id
+  }
+  targetDay.places = targetDay.places || []
+  if (oldIndex >= 0 && oldIndex <= targetDay.places.length) {
+    targetDay.places.splice(oldIndex, 0, place)
+  } else {
+    targetDay.places.push(place)
+  }
+  flight.placeRef = { dayId: targetDay.id, placeId }
+  DB.save(list)
+}
+
 async function resolveFlightAirport(tripId, flightId, which) {
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
@@ -1411,11 +1541,50 @@ function renderPlaces() {
   places.forEach((place, i) => {
     if (i > 0) {
       const prev = places[i - 1]
-      const bar = createDirBar(prev, place, place, dir => {
-        DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
-        renderPlaces()
+      // 교통편 항목 앞뒤로는 이동배지 표시 안함
+      if (prev.category !== 'transport' && place.category !== 'transport') {
+        const bar = createDirBar(prev, place, place, dir => {
+          DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
+          renderPlaces()
+        })
+        list.appendChild(bar)
+      }
+    }
+
+    // 교통편 항목 — 특수 카드
+    if (place.category === 'transport') {
+      const modeIcon = place.transportMode === 'flight' ? '✈️' : place.transportMode === 'train' ? '🚄' : '🚗'
+      const card = document.createElement('div')
+      card.className = 'transport-card'
+      card.innerHTML = `
+        <span class="transport-icon">${modeIcon}</span>
+        <div class="transport-info">
+          <div class="transport-route">${place.fromName} → ${place.toName}</div>
+          <div class="transport-meta">${place.time ? place.time : ''}${place.memo ? (place.time ? ' · ' : '') + place.memo : ''}</div>
+        </div>
+        <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="movebtn" data-move="1" ${i === (places.length - 1) ? 'disabled' : ''}>↓</button>
+        <button class="delbtn">삭제</button>`
+      card.querySelectorAll('.movebtn').forEach(btn => {
+        btn.onclick = () => {
+          const dir = parseInt(btn.dataset.move, 10)
+          DB.movePlace(state.tripId, state.dayId, place.id, dir)
+          renderPlaces()
+        }
       })
-      list.appendChild(bar)
+      card.querySelector('.delbtn').onclick = () => {
+        if (place._flightId) {
+          if (!confirm('이 교통편을 삭제하면 2페이지의 교통편 정보도 함께 삭제돼요. 계속할까요?')) return
+          const list = DB.trips
+          const t = list.find(x => x.id === state.tripId)
+          t.flights = (t.flights || []).filter(x => x.id !== place._flightId)
+          DB.save(list)
+        }
+        DB.deletePlace(state.tripId, state.dayId, place.id)
+        renderPlaces()
+      }
+      list.appendChild(card)
+      return
     }
 
     const cat = CAT[place.category] || CAT.attraction
@@ -1706,6 +1875,7 @@ async function savePlace(nameOrId, coords) {
   DB.addPlace(state.tripId, state.dayId, place)
   renderPlaces()
 }
+
 
 function openNameModal() {
   const modal = document.getElementById('modal')
@@ -2142,10 +2312,11 @@ function updateAuthUI() {
   const statusEl = document.getElementById('auth-status')
   const btnEl = document.getElementById('auth-btn')
   if (currentUser) {
-    statusEl.textContent = currentUser.email
+    const initial = (currentUser.email || '?')[0].toUpperCase()
+    statusEl.innerHTML = `<span class="user-avatar" title="${currentUser.email}">${initial}</span>`
     btnEl.textContent = '로그아웃'
   } else {
-    statusEl.textContent = ''
+    statusEl.innerHTML = ''
     btnEl.textContent = '로그인'
   }
 }
