@@ -102,11 +102,17 @@ button{cursor:pointer}
 .open-b{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;padding:1px 5px}
 .closed-b{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #ccc;color:#888;padding:1px 5px}
 .phrs{font-size:10px;color:#555;margin-bottom:6px}
-.pcost{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.pcost{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:10px}
+.pcost-add{font-size:10px;color:#bbb;cursor:pointer;letter-spacing:.02em}
+.pcost-add:hover{color:#000}
+.pcost-disp{font-size:10px;color:#000;cursor:pointer;letter-spacing:.02em;font-weight:500}
+.pcost-disp:hover{text-decoration:underline}
+.pcost-krw{font-weight:400;color:#888}
 .pcost-amt{font-size:10px;border:.5px solid #ddd;padding:5px 7px;outline:none;width:90px;color:#000;background:#fff}
 .pcost-amt:focus{border-color:#000}
 .pcost-cur{font-size:10px;border:.5px solid #ddd;padding:5px 4px;outline:none;color:#000;background:#fff}
-.pcost-krw{font-size:9px;color:#888}
+.pcost-ok{font-size:9px;letter-spacing:.06em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:5px 8px;color:#000}
+.pcost-ok:hover{background:#000;color:#fff}
 .daytotal{padding:8px 20px;border-bottom:.5px solid #ddd;font-size:10px;letter-spacing:.05em;color:#000;background:#fafafa}
 .daytotal span{font-weight:700;margin-left:4px}
 .pmemo{font-size:10px;color:#333;background:#f0f0f0;padding:5px 8px;font-style:italic;border:none;outline:none;width:100%;resize:none;display:block}
@@ -224,6 +230,14 @@ button{cursor:pointer}
       <div class="hotel-section-hint">구글지도 링크 입력 시 자동으로 숙소명을 가져와요. 체크인/체크아웃 날짜를 입력하면 해당 기간 Day 일정에 도착/출발로 자동 표시됩니다.</div>
       <div class="hotel-list" id="p2-hotel-list"></div>
       <button type="button" class="hotel-add" id="p2-hotel-add">+ 숙소 추가</button>
+    </div>
+  </div>
+  <div class="hotel-section">
+    <div class="hotel-section-title" id="flight-section-toggle" style="cursor:pointer">[ ✈️ 항공편 ▾ ]</div>
+    <div id="flight-section-body" style="display:none">
+      <div class="hotel-section-hint">출발/도착 공항과 날짜·시간을 입력하면 해당 날짜 일정에 표시됩니다.</div>
+      <div class="hotel-list" id="p2-flight-list"></div>
+      <button type="button" class="hotel-add" id="p2-flight-add">+ 항공편 추가</button>
     </div>
   </div>
   <div class="rlist" id="p2-list"></div>
@@ -658,6 +672,7 @@ function renderP2() {
   document.getElementById('p2-ti').textContent = cleanName(trip.name)
 
   renderP2Hotels(trip)
+  renderP2Flights(trip)
 
   // 날짜 기준 자동 정렬 (날짜 없는 항목은 뒤로)
   if (trip.days && trip.days.length > 1) {
@@ -920,6 +935,153 @@ function renderP3IfActive() {
   if (state.page === 'p3') renderP3()
 }
 
+/* ── 2페이지 항공편 관리 ── */
+function renderP2Flights(trip) {
+  const wrap = document.getElementById('p2-flight-list')
+  wrap.innerHTML = ''
+  const flights = trip.flights || []
+
+  flights.forEach(flight => {
+    const row = document.createElement('div')
+    row.className = 'hotel-row'
+
+    const isResolved = !!(flight.depName && flight.arrName && !flight._editing)
+
+    if (isResolved) {
+      row.innerHTML = `
+        <div class="hotel-summary">
+          <span class="hotel-summary-icon">✈️</span>
+          <div class="hotel-summary-text">
+            <div class="hotel-summary-name">🛫 ${flight.depName} → 🛬 ${flight.arrName}</div>
+            <div class="hotel-summary-dates">${flight.depDate || '?'} ${flight.depTime || ''} → ${flight.arrDate || '?'} ${flight.arrTime || ''}</div>
+          </div>
+          <button type="button" class="hotel-edit">수정</button>
+          <button type="button" class="hotel-del">제거</button>
+        </div>`
+      row.querySelector('.hotel-edit').onclick = () => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        const f = t.flights.find(x => x.id === flight.id)
+        if (f) f._editing = true
+        DB.save(list)
+        renderP2()
+      }
+    } else {
+      row.innerHTML = `
+        <div class="hotel-row-top">
+          <span style="font-size:11px;font-weight:700">🛫 출발</span>
+          <button type="button" class="hotel-del">제거</button>
+        </div>
+        <div class="hotel-row-top">
+          <input type="text" class="f-dep-name" placeholder="출발 공항 (예: 인천국제공항)" value="${flight.depInput || ''}"/>
+        </div>
+        <div class="hotel-dates">
+          <input type="date" class="f-dep-date" value="${flight.depDate || ''}"/>
+          <input type="time" class="f-dep-time" value="${flight.depTime || ''}"/>
+        </div>
+        <div class="hotel-row-top" style="margin-top:6px">
+          <span style="font-size:11px;font-weight:700">🛬 도착</span>
+        </div>
+        <div class="hotel-row-top">
+          <input type="text" class="f-arr-name" placeholder="도착 공항 (예: 나리타국제공항)" value="${flight.arrInput || ''}"/>
+        </div>
+        <div class="hotel-dates">
+          <input type="date" class="f-arr-date" value="${flight.arrDate || ''}"/>
+          <input type="time" class="f-arr-time" value="${flight.arrTime || ''}"/>
+        </div>
+        ${flight.depName ? `<div class="hotel-resolved">✓ 출발: ${flight.depName}</div>` : ''}
+        ${flight.arrName ? `<div class="hotel-resolved">✓ 도착: ${flight.arrName}</div>` : ''}
+        <button type="button" class="hotel-done">완료</button>`
+
+      const save = (changes) => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        const f = t.flights.find(x => x.id === flight.id)
+        Object.assign(f, changes)
+        DB.save(list)
+      }
+
+      row.querySelector('.f-dep-name').onchange = async e => {
+        const val = e.target.value.trim()
+        save({ depInput: val, depName: null, depLat: null, depLng: null })
+        await resolveFlightAirport(trip.id, flight.id, 'dep')
+        renderP2(); renderP3IfActive()
+      }
+      row.querySelector('.f-arr-name').onchange = async e => {
+        const val = e.target.value.trim()
+        save({ arrInput: val, arrName: null, arrLat: null, arrLng: null })
+        await resolveFlightAirport(trip.id, flight.id, 'arr')
+        renderP2(); renderP3IfActive()
+      }
+      row.querySelector('.f-dep-date').onchange = e => { save({ depDate: e.target.value }); renderP2(); renderP3IfActive() }
+      row.querySelector('.f-dep-time').onchange = e => { save({ depTime: e.target.value }); renderP2(); renderP3IfActive() }
+      row.querySelector('.f-arr-date').onchange = e => { save({ arrDate: e.target.value }); renderP2(); renderP3IfActive() }
+      row.querySelector('.f-arr-time').onchange = e => { save({ arrTime: e.target.value }); renderP2(); renderP3IfActive() }
+
+      row.querySelector('.hotel-done').onclick = () => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        const f = t.flights.find(x => x.id === flight.id)
+        delete f._editing
+        DB.save(list)
+        renderP2()
+      }
+    }
+
+    row.querySelector('.hotel-del').onclick = () => {
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      t.flights = t.flights.filter(x => x.id !== flight.id)
+      DB.save(list)
+      renderP2(); renderP3IfActive()
+    }
+    wrap.appendChild(row)
+  })
+}
+
+// 공항 이름/좌표 자동 검색
+async function resolveFlightAirport(tripId, flightId, which) {
+  const list = DB.trips
+  const t = list.find(x => x.id === tripId)
+  const flight = t.flights.find(x => x.id === flightId)
+  if (!flight) return
+  const input = which === 'dep' ? flight.depInput : flight.arrInput
+  if (!input) return
+  if (typeof google === 'undefined' || !google.maps || !google.maps.places) return
+  try {
+    const detail = await queryPlaces(input)
+    if (detail) {
+      if (which === 'dep') {
+        flight.depName = detail.name
+        flight.depLat = detail.lat
+        flight.depLng = detail.lng
+      } else {
+        flight.arrName = detail.name
+        flight.arrLat = detail.lat
+        flight.arrLng = detail.lng
+      }
+    } else {
+      if (which === 'dep') flight.depName = input
+      else flight.arrName = input
+    }
+  } catch (e) {
+    if (which === 'dep') flight.depName = flight.depName || input
+    else flight.arrName = flight.arrName || input
+  }
+  DB.save(list)
+}
+
+document.getElementById('p2-flight-add')?.addEventListener('click', () => {
+  const trip = DB.getTrip(state.tripId)
+  if (!trip) return
+  const list = DB.trips
+  const t = list.find(x => x.id === trip.id)
+  t.flights = t.flights || []
+  t.flights.push({ id: 'f' + Date.now(), depInput: '', arrInput: '', depDate: '', depTime: '', arrDate: '', arrTime: '', depName: null, arrName: null, depLat: null, depLng: null, arrLat: null, arrLng: null, _editing: true })
+  DB.save(list)
+  renderP2()
+})
+
 document.getElementById('hotel-section-toggle')?.addEventListener('click', () => {
   const body = document.getElementById('hotel-section-body')
   const toggle = document.getElementById('hotel-section-toggle')
@@ -927,6 +1089,15 @@ document.getElementById('hotel-section-toggle')?.addEventListener('click', () =>
   body.style.display = open ? 'none' : 'flex'
   if (!open) body.style.flexDirection = 'column'
   toggle.textContent = open ? '[ 🏨 숙소 ▾ ]' : '[ 🏨 숙소 ▴ ]'
+})
+
+document.getElementById('flight-section-toggle')?.addEventListener('click', () => {
+  const body = document.getElementById('flight-section-body')
+  const toggle = document.getElementById('flight-section-toggle')
+  const open = body.style.display !== 'none'
+  body.style.display = open ? 'none' : 'flex'
+  if (!open) body.style.flexDirection = 'column'
+  toggle.textContent = open ? '[ ✈️ 항공편 ▾ ]' : '[ ✈️ 항공편 ▴ ]'
 })
 
 document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
@@ -1006,6 +1177,51 @@ function renderHotelMarker(hotel, label) {
 }
 
 // 현재 Day의 장소별 비용을 KRW로 환산해 합산 표시
+// 장소 카드의 금액/화폐 영역 렌더 (클릭 → 인라인 편집)
+function renderPCost(el, place, day) {
+  const cur = place.currency || defaultCurrencyForCountry(day.countryCode)
+
+  function renderDisplay() {
+    if (!place.cost) {
+      el.innerHTML = `<span class="pcost-add">💰 금액 추가</span>`
+      el.querySelector('.pcost-add').onclick = renderEdit
+      return
+    }
+    el.innerHTML = `<span class="pcost-disp">💰 [${cur}] ${place.cost.toLocaleString()}<span class="pcost-krw"></span></span>`
+    el.querySelector('.pcost-disp').onclick = renderEdit
+    const krwSpan = el.querySelector('.pcost-krw')
+    if (cur !== 'KRW') {
+      krwSpan.textContent = ' · 환산 중…'
+      getFxRateToKRW(cur).then(rate => {
+        if (rate) krwSpan.textContent = ` · ≈ ₩${Math.round(place.cost * rate).toLocaleString()}`
+        else krwSpan.textContent = ''
+      })
+    }
+  }
+
+  function renderEdit() {
+    el.innerHTML = `
+      <select class="pcost-cur">${CURRENCY_LIST.map(c => `<option value="${c}" ${(cur === c) ? 'selected' : ''}>${c}</option>`).join('')}</select>
+      <input type="number" class="pcost-amt" placeholder="금액" value="${place.cost || ''}" min="0" step="any"/>
+      <button type="button" class="pcost-ok">완료</button>`
+    const amtInp = el.querySelector('.pcost-amt')
+    const curSel = el.querySelector('.pcost-cur')
+    amtInp.focus()
+    function commit() {
+      const amt = parseFloat(amtInp.value) || null
+      place.cost = amt
+      place.currency = curSel.value
+      DB.updatePlace(state.tripId, state.dayId, place.id, { cost: amt, currency: curSel.value })
+      renderDisplay()
+      updateDayTotal()
+    }
+    el.querySelector('.pcost-ok').onclick = commit
+    amtInp.onkeydown = e => { if (e.key === 'Enter') commit() }
+  }
+
+  renderDisplay()
+}
+
 async function updateDayTotal() {
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
@@ -1070,6 +1286,22 @@ function renderPlaces() {
   list.innerHTML = ''
   const places = day.places || []
 
+  // 해당 날짜의 항공편 표시 (출발/도착 각각)
+  ;(trip.flights || []).forEach(flight => {
+    if (flight.depDate === day.date && flight.depName) {
+      const m = document.createElement('div')
+      m.className = 'hotel-marker'
+      m.innerHTML = `<span class="hotel-marker-icon">🛫</span><span class="hotel-marker-text">출발 ${flight.depTime || ''} · <span class="hotel-marker-name">${flight.depName}</span></span>`
+      list.appendChild(m)
+    }
+    if (flight.arrDate === day.date && flight.arrName) {
+      const m = document.createElement('div')
+      m.className = 'hotel-marker'
+      m.innerHTML = `<span class="hotel-marker-icon">🛬</span><span class="hotel-marker-text">도착 ${flight.arrTime || ''} · <span class="hotel-marker-name">${flight.arrName}</span></span>`
+      list.appendChild(m)
+    }
+  })
+
   // 일정 시작 — 전날 묵었던 숙소 → 첫 장소
   const hotelStart = getHotelForDate(trip, day.date, 'start')
   if (hotelStart && hotelStart.lat != null && places[0] && places[0].lat != null) {
@@ -1111,11 +1343,7 @@ function renderPlaces() {
         </div>
       </div>
       <div class="phrs">${place.hours || '영업시간 정보 없음'}${place.address ? ` · ${place.address}` : ''}</div>
-      <div class="pcost">
-        <input type="number" class="pcost-amt" placeholder="금액" value="${place.cost || ''}" min="0" step="any"/>
-        <select class="pcost-cur">${CURRENCY_LIST.map(c => `<option value="${c}" ${((place.currency || defaultCurrencyForCountry(day.countryCode)) === c) ? 'selected' : ''}>${c}</option>`).join('')}</select>
-        <span class="pcost-krw">${place.cost ? '' : ''}</span>
-      </div>
+      <div class="pcost" data-pid="${place.id}"></div>
       <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
 
     item.querySelector('.delbtn').onclick = () => {
@@ -1133,34 +1361,8 @@ function renderPlaces() {
       DB.updatePlace(state.tripId, state.dayId, place.id, { memo: e.target.value })
     }
 
-    // 금액/화폐 입력
-    const amtInp = item.querySelector('.pcost-amt')
-    const curSel = item.querySelector('.pcost-cur')
-    const krwSpan = item.querySelector('.pcost-krw')
-    async function updateKrwDisplay() {
-      const amt = parseFloat(amtInp.value)
-      const cur = curSel.value
-      if (!amt || amt <= 0) { krwSpan.textContent = ''; return }
-      if (cur === 'KRW') { krwSpan.textContent = ''; return }
-      krwSpan.textContent = '환산 중…'
-      const rate = await getFxRateToKRW(cur)
-      if (rate) {
-        const krw = Math.round(amt * rate)
-        krwSpan.textContent = `≈ ₩${krw.toLocaleString()}`
-      } else {
-        krwSpan.textContent = ''
-      }
-    }
-    updateKrwDisplay()
-    amtInp.onchange = () => {
-      const amt = parseFloat(amtInp.value) || null
-      DB.updatePlace(state.tripId, state.dayId, place.id, { cost: amt, currency: curSel.value })
-      updateKrwDisplay().then(() => updateDayTotal())
-    }
-    curSel.onchange = () => {
-      DB.updatePlace(state.tripId, state.dayId, place.id, { currency: curSel.value })
-      updateKrwDisplay().then(() => updateDayTotal())
-    }
+    // 금액/화폐 — 클릭하면 인라인 편집
+    renderPCost(item.querySelector('.pcost'), place, day)
 
     // 이름 클릭 → 인라인 편집
     const nameEl = item.querySelector('.pname')
