@@ -701,7 +701,19 @@ function renderP2Hotels(trip) {
   wrap.innerHTML = ''
   const hotels = trip.hotels || []
 
-  hotels.forEach((hotel, idx) => {
+  // 기존 데이터에 id 없으면 부여
+  let needSave = false
+  hotels.forEach(h => { if (!h.id) { h.id = 'h' + Date.now() + Math.random().toString(36).slice(2,6); needSave = true } })
+  if (needSave) DB.updateTrip(trip.id, { hotels })
+
+  // 표시용 도시/국가만 추출 (formatted_address에서 마지막 1~2개 구성요소)
+  function shortAddress(addr) {
+    if (!addr) return ''
+    const parts = addr.split(',').map(s => s.trim())
+    return parts.slice(-2).join(', ')
+  }
+
+  hotels.forEach(hotel => {
     const row = document.createElement('div')
     row.className = 'hotel-row'
 
@@ -714,7 +726,7 @@ function renderP2Hotels(trip) {
           <span class="hotel-summary-icon">🏨</span>
           <div class="hotel-summary-text">
             <div class="hotel-summary-name">${hotel.name}</div>
-            <div class="hotel-summary-dates">${hotel.checkin || '?'} → ${hotel.checkout || '?'}</div>
+            <div class="hotel-summary-dates">${hotel.checkin || '?'} → ${hotel.checkout || '?'}${hotel.address ? ' · ' + shortAddress(hotel.address) : ''}</div>
           </div>
           <button type="button" class="hotel-edit">수정</button>
           <button type="button" class="hotel-del">제거</button>
@@ -722,7 +734,8 @@ function renderP2Hotels(trip) {
       row.querySelector('.hotel-edit').onclick = () => {
         const list = DB.trips
         const t = list.find(x => x.id === trip.id)
-        t.hotels[idx]._editing = true
+        const h = t.hotels.find(x => x.id === hotel.id)
+        if (h) h._editing = true
         DB.save(list)
         renderP2()
       }
@@ -747,32 +760,33 @@ function renderP2Hotels(trip) {
         const val = e.target.value.trim()
         const list = DB.trips
         const t = list.find(x => x.id === trip.id)
-        t.hotels[idx].input = val
-        t.hotels[idx].name = null
-        t.hotels[idx].lat = null
-        t.hotels[idx].lng = null
+        const h = t.hotels.find(x => x.id === hotel.id)
+        h.input = val; h.name = null; h.lat = null; h.lng = null; h.address = null
         DB.save(list)
-        await resolveHotel(trip.id, idx)
+        await resolveHotel(trip.id, hotel.id)
         renderP2(); renderP3IfActive()
       }
       row.querySelector('.h-checkin').onchange = e => {
         const list = DB.trips
         const t = list.find(x => x.id === trip.id)
-        t.hotels[idx].checkin = e.target.value
+        const h = t.hotels.find(x => x.id === hotel.id)
+        h.checkin = e.target.value
         DB.save(list)
         renderP2(); renderP3IfActive()
       }
       row.querySelector('.h-checkout').onchange = e => {
         const list = DB.trips
         const t = list.find(x => x.id === trip.id)
-        t.hotels[idx].checkout = e.target.value
+        const h = t.hotels.find(x => x.id === hotel.id)
+        h.checkout = e.target.value
         DB.save(list)
         renderP2(); renderP3IfActive()
       }
       row.querySelector('.hotel-done').onclick = () => {
         const list = DB.trips
         const t = list.find(x => x.id === trip.id)
-        delete t.hotels[idx]._editing
+        const h = t.hotels.find(x => x.id === hotel.id)
+        delete h._editing
         DB.save(list)
         renderP2()
       }
@@ -781,7 +795,7 @@ function renderP2Hotels(trip) {
         retryBtn.onclick = async () => {
           retryBtn.textContent = '찾는 중…'
           retryBtn.disabled = true
-          await resolveHotel(trip.id, idx)
+          await resolveHotel(trip.id, hotel.id)
           renderP2(); renderP3IfActive()
         }
       }
@@ -790,7 +804,7 @@ function renderP2Hotels(trip) {
     row.querySelector('.hotel-del').onclick = () => {
       const list = DB.trips
       const t = list.find(x => x.id === trip.id)
-      t.hotels.splice(idx, 1)
+      t.hotels = t.hotels.filter(x => x.id !== hotel.id)
       DB.save(list)
       renderP2(); renderP3IfActive()
     }
@@ -817,16 +831,16 @@ document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
   const list = DB.trips
   const t = list.find(x => x.id === trip.id)
   t.hotels = t.hotels || []
-  t.hotels.push({ input: '', checkin: '', checkout: '', name: null, lat: null, lng: null, _editing: true })
+  t.hotels.push({ id: 'h' + Date.now(), input: '', checkin: '', checkout: '', name: null, lat: null, lng: null, _editing: true })
   DB.save(list)
   renderP2()
 })
 
 // 숙소 입력값에서 이름/좌표 추출
-async function resolveHotel(tripId, idx) {
+async function resolveHotel(tripId, hotelId) {
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
-  const hotel = t.hotels[idx]
+  const hotel = t.hotels.find(x => x.id === hotelId)
   if (!hotel || !hotel.input) return
   let raw = hotel.input
   try {
