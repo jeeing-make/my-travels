@@ -29,10 +29,13 @@ button{cursor:pointer}
 /* 카드 */
 .tcard{border-right:1px solid #000;border-bottom:1px solid #000;cursor:pointer;position:relative;background:#fff}
 .tcard:hover{background:#fafafa}
-.tcard-ov{position:absolute;top:10px;right:10px;display:flex;gap:4px;opacity:0;transition:opacity .15s;z-index:5}
-.tcard:hover .tcard-ov{opacity:1}
+.tcard-ov{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;align-items:flex-end;gap:4px;opacity:0;transition:opacity .15s;z-index:5}
+.tcard:hover .tcard-ov,.tcard-ov.menu-open{opacity:1}
 .tcard-ovbtn{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:2px 8px}
 .tcard-ovbtn:hover{background:#000;color:#fff}
+.tcard-menubtn{font-size:14px;color:#000;background:#fff;border:1px solid #000;padding:0 6px;line-height:1.6}
+.tcard-menubtn:hover{background:#000;color:#fff}
+.tcard-menu{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
 .tcard-body{padding:18px 20px 0}
 .tw1{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block}
 .trow2{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:6px}
@@ -79,6 +82,37 @@ button{cursor:pointer}
 .hotel-redate,.h-redate-ok{font-size:9px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:4px 8px;color:#888}
 .hotel-redate:hover,.h-redate-ok:hover{border-color:#000;color:#000}
 .user-avatar{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#000;color:#fff;font-size:10px;font-weight:700;letter-spacing:0;cursor:default}
+
+/* 읽기전용 공유모드: 모든 수정 UI 숨김 */
+.share-mode .tcard-ov,
+.share-mode .hotel-section,
+.share-mode .add-place,
+.share-mode .rmenubtn,
+.share-mode .rmenu,
+.share-mode .pmorebtn,
+.share-mode .movebtn,
+.share-mode .delbtn,
+.share-mode .pcost-add,
+.share-mode .pcost-disp,
+.share-mode .pmemo,
+.share-mode #auth-btn,
+.share-mode #auth-status,
+.share-mode .transport-board-ctrl,
+.share-mode .pname { pointer-events: none; cursor: default; }
+.share-mode .tcard-ov,
+.share-mode .hotel-section,
+.share-mode .add-place,
+.share-mode .rmenubtn,
+.share-mode .rmenu,
+.share-mode .pmorebtn,
+.share-mode .movebtn,
+.share-mode #auth-btn,
+.share-mode #auth-status,
+.share-mode .transport-board-ctrl { display: none !important; }
+.share-mode .pcost-disp { cursor: default !important; text-decoration: none !important; }
+.share-mode .pname { cursor: default !important; }
+.share-mode-badge{display:none}
+.share-mode .share-mode-badge{display:inline-block;font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;padding:4px 8px;color:#888}
 
 /* 교통편 */
 .transport-mode-pick{display:flex;gap:6px}
@@ -222,9 +256,13 @@ button{cursor:pointer}
 .flight-plane{font-size:20px;flex-shrink:0;filter:grayscale(.4)}
 .flight-dot{width:7px;height:7px;border-radius:50%;border:1.5px solid #6a8a9a;flex-shrink:0;background:#eaf4fb}
 .flight-dot.filled{background:#2a4a5a;border-color:#2a4a5a}
-.transport-board{flex-wrap:wrap;gap:8px 12px}
-.transport-board-ctrl{display:flex;gap:5px;width:100%;justify-content:flex-end;order:99}
-.transport-board-ctrl .movebtn,.transport-board-ctrl .delbtn{background:#fff}
+.transport-board{flex-wrap:wrap;gap:6px 10px;padding:12px 16px;position:relative}
+.transport-board .flight-city{font-size:14px}
+.transport-board .flight-label{font-size:8px}
+.transport-board .flight-time{font-size:8px}
+.transport-board .flight-plane{font-size:16px}
+.transport-board-ctrl{position:absolute;top:8px;right:12px;display:flex;gap:4px}
+.transport-board .flight-side.right{padding-top:18px}
 .hotel-marker{padding:10px 16px;background:#fafafa;border-bottom:.5px solid #ddd;display:flex;align-items:center;gap:8px}
 .hotel-marker-icon{font-size:16px;flex-shrink:0}
 .hotel-marker-text{font-size:11px;color:#555;letter-spacing:.02em}
@@ -237,6 +275,7 @@ button{cursor:pointer}
 <nav class="nav">
   <span class="nav-logo" id="nav-logo">MY TRAVELS</span>
   <div style="display:flex;align-items:center;gap:10px">
+    <span class="share-mode-badge">읽기 전용 (공유됨)</span>
     <span id="auth-status" style="font-size:9px;color:#888;letter-spacing:.05em"></span>
     <button id="auth-btn" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 10px;color:#888">로그인</button>
     <button id="nav-back">← 뒤로</button>
@@ -320,6 +359,7 @@ let syncTimer = null
 
 const DB = {
   get trips() {
+    if (state.shareMode) return state.shareData ? [state.shareData] : []
     try { return JSON.parse(localStorage.getItem('mt_trips') || '[]') } catch { return [] }
   },
   save(t) {
@@ -458,7 +498,7 @@ const DB = {
 /* =========================================================
    ROUTER
    ========================================================= */
-const state = { page: 'p1', tripId: null, dayId: null }
+const state = { page: 'p1', tripId: null, dayId: null, shareMode: false, shareData: null }
 
 function go(page, params) {
   Object.assign(state, { page }, params || {})
@@ -468,6 +508,7 @@ function go(page, params) {
 function renderPage() {
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'))
   document.getElementById(state.page).classList.add('active')
+  document.body.classList.toggle('share-mode', !!state.shareMode)
   const back = document.getElementById('nav-back')
   const logo = document.getElementById('nav-logo')
   if (state.page === 'p1') {
@@ -605,8 +646,12 @@ function renderP1() {
     card.className = 'tcard'
     card.innerHTML = `
       <div class="tcard-ov">
-        <button class="tcard-ovbtn" data-action="edit" data-id="${trip.id}">수정</button>
-        <button class="tcard-ovbtn" data-action="del" data-id="${trip.id}">삭제</button>
+        <button class="tcard-menubtn" data-action="menu">⋮</button>
+        <div class="tcard-menu" style="display:none">
+          <button class="tcard-ovbtn" data-action="edit" data-id="${trip.id}">수정</button>
+          <button class="tcard-ovbtn" data-action="share" data-id="${trip.id}">공유</button>
+          <button class="tcard-ovbtn" data-action="del" data-id="${trip.id}">삭제</button>
+        </div>
       </div>
       <div class="tcard-body">
         <span class="tw1">${w1.toUpperCase()}</span>
@@ -629,9 +674,17 @@ function renderP1() {
       const btn = e.target.closest('[data-action]')
       if (btn) {
         e.stopPropagation()
-        if (btn.dataset.action === 'edit') openTripModal(trip.id)
+        if (btn.dataset.action === 'menu') {
+          const menu = card.querySelector('.tcard-menu')
+          const ov = card.querySelector('.tcard-ov')
+          const open = menu.style.display === 'none'
+          menu.style.display = open ? 'flex' : 'none'
+          ov.classList.toggle('menu-open', open)
+        } else if (btn.dataset.action === 'edit') openTripModal(trip.id)
         else if (btn.dataset.action === 'del') {
           if (confirm('이 여행을 삭제할까요?')) { DB.deleteTrip(trip.id); renderP1() }
+        } else if (btn.dataset.action === 'share') {
+          openShareModal(trip)
         }
       } else {
         go('p2', { tripId: trip.id })
@@ -1540,7 +1593,21 @@ function renderPlaces() {
 
   const list = document.getElementById('p3-places')
   list.innerHTML = ''
-  const places = day.places || []
+  let places = day.places || []
+
+  // 좌표 없는 교통편 항목이 남아있으면 정리 (순서변경 불가능한 것은 표시 안 함)
+  const toRemove = places.filter(p => p.category === 'transport' && p._flightId && (() => {
+    const f = (trip.flights || []).find(x => x.id === p._flightId)
+    return !f || f.depLat == null || f.arrLat == null
+  })())
+  if (toRemove.length) {
+    const list2 = DB.trips
+    const t2 = list2.find(x => x.id === trip.id)
+    const day2 = (t2.days || []).find(d => d.id === day.id)
+    day2.places = (day2.places || []).filter(p => !toRemove.some(r => r.id === p.id))
+    DB.save(list2)
+    places = day2.places
+  }
 
   // 해당 날짜의 항공편 표시 (보드카드 스타일)
   ;(trip.flights || []).forEach(flight => {
@@ -1582,10 +1649,15 @@ function renderPlaces() {
       const card = document.createElement('div')
       card.className = 'flight-card transport-board'
       card.innerHTML = `
+        <div class="transport-board-ctrl">
+          <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="movebtn" data-move="1" ${i === (places.length - 1) ? 'disabled' : ''}>↓</button>
+          <button class="delbtn">삭제</button>
+        </div>
         <div class="flight-side">
           <div class="flight-city">${place.fromName}</div>
-          <div class="flight-label">FROM</div>
-          <div class="flight-time">${place.fromDate || ''}${place.fromTime ? ' · ' + place.fromTime : ''}</div>
+          <div class="flight-label">FROM${place.fromTime ? ' · ' + place.fromTime : ''}</div>
+          <div class="flight-time">${place.fromDate || ''}</div>
         </div>
         <div class="flight-mid">
           <span class="flight-dot"></span>
@@ -1596,13 +1668,8 @@ function renderPlaces() {
         </div>
         <div class="flight-side right">
           <div class="flight-city">${place.toName}</div>
-          <div class="flight-label">TO</div>
-          <div class="flight-time">${place.toDate || ''}${place.toTime ? ' · ' + place.toTime : ''}</div>
-        </div>
-        <div class="transport-board-ctrl">
-          <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
-          <button class="movebtn" data-move="1" ${i === (places.length - 1) ? 'disabled' : ''}>↓</button>
-          <button class="delbtn">삭제</button>
+          <div class="flight-label">TO${place.toTime ? ' · ' + place.toTime : ''}</div>
+          <div class="flight-time">${place.toDate || ''}</div>
         </div>`
       card.querySelectorAll('.movebtn').forEach(btn => {
         btn.onclick = () => {
@@ -1916,6 +1983,70 @@ async function savePlace(nameOrId, coords) {
 
 
 // 장소 + 버튼 — 날짜 변경 / 삭제 모달
+// 여행 공유 링크 생성/표시
+async function openShareModal(trip) {
+  if (!supa) { alert('공유 기능을 사용하려면 로그인이 필요해요.'); return }
+  if (!currentUser) { alert('공유 기능을 사용하려면 로그인이 필요해요.'); return }
+
+  const modal = document.getElementById('modal')
+  modal.innerHTML = `<div class="mbox">
+    <div class="mhd">
+      <span class="mtitle">[ 여행 공유 ]</span>
+      <button class="mclose" onclick="closeModal()">×</button>
+    </div>
+    <div class="mbody">
+      <div id="share-status" style="font-size:11px;color:#888">공유 링크 생성 중…</div>
+    </div>
+  </div>`
+  modal.style.display = 'flex'
+
+  try {
+    let shareId = trip.shareId
+    if (!shareId) {
+      shareId = 's' + Date.now() + Math.random().toString(36).slice(2, 8)
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      t.shareId = shareId
+      DB.save(list)
+    }
+
+    // 최신 데이터로 업서트
+    const { error } = await supa.from('shared_trips').upsert({ share_id: shareId, trip_data: trip })
+    if (error) throw error
+
+    const url = `${location.origin}${location.pathname}?share=${shareId}`
+    const statusEl = document.getElementById('share-status')
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <div style="font-size:10px;color:#000;margin-bottom:8px">아래 링크를 공유하면 누구나 로그인 없이 읽기 전용으로 볼 수 있어요.</div>
+        <div style="display:flex;gap:6px">
+          <input class="min" id="share-url" value="${url}" readonly style="flex:1;font-size:10px"/>
+          <button class="mbtn" id="share-copy" style="white-space:nowrap">복사</button>
+        </div>
+        <div style="margin-top:10px"><button class="mbtn" id="share-revoke" style="border-color:#c00;color:#c00">공유 중단</button></div>`
+      document.getElementById('share-copy').onclick = () => {
+        const inp = document.getElementById('share-url')
+        inp.select()
+        navigator.clipboard?.writeText(inp.value)
+        document.getElementById('share-copy').textContent = '복사됨!'
+      }
+      document.getElementById('share-revoke').onclick = async () => {
+        if (!confirm('공유를 중단하면 기존 링크가 더 이상 작동하지 않아요. 계속할까요?')) return
+        await supa.from('shared_trips').delete().eq('share_id', shareId)
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        delete t.shareId
+        DB.save(list)
+        closeModal()
+      }
+    }
+  } catch (e) {
+    console.error('공유 실패:', e)
+    const statusEl = document.getElementById('share-status')
+    if (statusEl) statusEl.textContent = '공유 링크 생성에 실패했어요: ' + (e.message || e)
+  }
+}
+
 function openPlaceMoreModal(place, day) {
   const trip = DB.getTrip(state.tripId)
   const modal = document.getElementById('modal')
@@ -2492,12 +2623,34 @@ async function initAuth() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+async function initShareView() {
+  const params = new URLSearchParams(location.search)
+  const shareId = params.get('share')
+  if (!shareId || !supa) return false
+  try {
+    const { data, error } = await supa.from('shared_trips').select('trip_data').eq('share_id', shareId).maybeSingle()
+    if (error || !data) {
+      alert('공유 링크를 찾을 수 없거나 만료되었어요.')
+      return false
+    }
+    state.shareMode = true
+    state.shareData = data.trip_data
+    state.tripId = data.trip_data.id
+    state.page = 'p2'
+    return true
+  } catch (e) {
+    console.error('공유 데이터 로드 실패:', e)
+    return false
+  }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const isShare = await initShareView()
   renderPage()
   document.getElementById('modal').addEventListener('click', e => {
     if (e.target.id === 'modal') closeModal()
   })
-  initAuth()
+  if (!isShare) initAuth()
 })
 </script>
 
