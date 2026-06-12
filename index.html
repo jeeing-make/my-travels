@@ -38,13 +38,13 @@ button{cursor:pointer}
 .timg1 img{width:100%;height:100%;object-fit:cover;display:block}
 .tw2{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;text-align:right;flex:1}
 .tw3{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;margin-top:6px}
-.tfoot{margin-top:16px;padding:12px 20px 18px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.tfoot{border-top:.5px solid #ddd;margin-top:16px;padding:12px 20px 18px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .tmeta{flex:1;display:flex;flex-direction:column;gap:4px}
-.tml{letter-spacing:.06em;text-transform:uppercase;color:#000;line-height:1.6}
-.tml-date{font-size:13px;font-weight:700}
-.tml-info{font-size:9px;color:#777;font-weight:400}
-.tml-people{font-size:11px;font-weight:500}
-.timg2{width:68px;height:108px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:20px}
+.tml{letter-spacing:.06em;text-transform:uppercase;color:#888;line-height:1.6}
+.tml-date{font-size:13px;font-weight:700;color:#888}
+.tml-info{font-size:9px;color:#999;font-weight:400}
+.tml-people{font-size:11px;font-weight:500;color:#888}
+.timg2{width:68px;height:68px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:20px}
 .timg2 img{width:100%;height:100%;object-fit:cover;display:block}
 .add-card{border-right:1px solid #000;border-bottom:1px solid #000;min-height:280px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;color:#ccc}
 .add-card:hover{background:#f5f5f5;color:#888}
@@ -617,19 +617,21 @@ function renderPlaces() {
 /* =========================================================
    장소 추가
    ========================================================= */
-// 단축 URL(maps.app.goo.gl)을 실제 URL로 펼침 — CORS 우회 프록시 사용
+// 단축 URL(maps.app.goo.gl) 펼치기 — 타임아웃 3초로 제한, 느리면 바로 포기
 async function expandShortUrl(url) {
   try {
     const proxyUrl = 'https://corsproxy.io/?url=' + encodeURIComponent(url)
-    const res = await fetch(proxyUrl, { redirect: 'follow' })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3000)
+    const res = await fetch(proxyUrl, { redirect: 'follow', signal: controller.signal })
+    clearTimeout(timeout)
     const finalUrl = res.url || url
     if (finalUrl && finalUrl !== proxyUrl) return finalUrl
-    // 프록시가 최종 URL을 안 주면 body에서 추출 시도
     const text = await res.text()
     const m = text.match(/https:\/\/www\.google\.com\/maps[^"'\s]+/)
     if (m) return m[0]
   } catch (e) {
-    console.warn('단축 URL 펼치기 실패:', e)
+    console.warn('단축 URL 펼치기 실패/타임아웃:', e)
   }
   return null
 }
@@ -819,14 +821,19 @@ function openNameModal() {
    ========================================================= */
 function queryPlaces(input) {
   return new Promise(resolve => {
+    let done = false
+    const finish = (v) => { if (!done) { done = true; resolve(v) } }
+    const timeout = setTimeout(() => finish(null), 5000)
+
     const svc = new google.maps.places.PlacesService(document.createElement('div'))
     const isId = /^ChIJ|^Eh/.test(input) || (input.length > 25 && !/\s/.test(input))
     const fields = ['name', 'types', 'opening_hours', 'geometry']
 
     const doDetail = id => {
       svc.getDetails({ placeId: id, fields }, (r, s) => {
-        if (s === 'OK') resolve(parsePlaceResult(r))
-        else resolve(null)
+        clearTimeout(timeout)
+        if (s === 'OK') finish(parsePlaceResult(r))
+        else finish(null)
       })
     }
 
@@ -837,7 +844,7 @@ function queryPlaces(input) {
         { query: input, fields: ['place_id', 'name', 'geometry'] },
         (res, s) => {
           if (s === 'OK' && res && res[0]) doDetail(res[0].place_id)
-          else resolve(null)
+          else { clearTimeout(timeout); finish(null) }
         }
       )
     }
@@ -861,22 +868,25 @@ function parsePlaceResult(r) {
 
 function calcDir(origin, dest) {
   return new Promise(resolve => {
+    let done = false
+    const finish = v => { if (!done) { done = true; finish(v) } }
+    setTimeout(() => finish(null), 5000)
     const svc = new google.maps.DirectionsService()
     svc.route(
       { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'WALKING' },
       (r, s) => {
-        if (s !== 'OK') { resolve(null); return }
+        if (s !== 'OK') { finish(null); return }
         const leg = r.routes[0].legs[0]
         if (leg.distance.value > 2000) {
           svc.route(
             { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'TRANSIT' },
             (r2, s2) => {
-              if (s2 === 'OK') resolve({ mode: 'transit', dur: r2.routes[0].legs[0].duration.text, dist: r2.routes[0].legs[0].distance.text })
-              else resolve({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
+              if (s2 === 'OK') finish({ mode: 'transit', dur: r2.routes[0].legs[0].duration.text, dist: r2.routes[0].legs[0].distance.text })
+              else finish({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
             }
           )
         } else {
-          resolve({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
+          finish({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
         }
       }
     )
