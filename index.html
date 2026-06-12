@@ -838,7 +838,7 @@ async function resolveHotel(tripId, idx) {
     if (raw.startsWith('http')) {
       const m = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/) || raw.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/)
       if (m) coords = { lat: parseFloat(m[1]), lng: parseFloat(m[2]) }
-      const pnM = raw.match(/\/place\/([^/@?+]+)/)
+      const pnM = raw.match(/\/place\/([^/@?]+)/)
       if (pnM) hotel.name = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
       if (coords) { hotel.lat = coords.lat; hotel.lng = coords.lng }
     } else {
@@ -968,7 +968,7 @@ function renderPlaces() {
           <button class="delbtn" data-pid="${place.id}">삭제</button>
         </div>
       </div>
-      <div class="phrs">${place.hours || '영업시간 정보 없음'}${place.lat ? ` · 📍 ${place.lat.toFixed(4)}, ${place.lng.toFixed(4)}` : ''}</div>
+      <div class="phrs">${place.hours || '영업시간 정보 없음'}${place.address ? ` · ${place.address}` : ''}</div>
       <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
 
     item.querySelector('.delbtn').onclick = () => {
@@ -1056,6 +1056,26 @@ async function doAddPlace() {
   btn.disabled = true
 
   try {
+    // Plus Code 감지 (예: PPR2+MJ 세팡 말레이시아 세랑고르)
+    const plusCodeMatch = raw.match(/^([23456789CFGHJMPQRVWX]{4,}\+[23456789CFGHJMPQRVWX]{2,3})(\s+.+)?$/i)
+    if (plusCodeMatch && typeof google !== 'undefined' && google.maps) {
+      const fullCode = plusCodeMatch[0]
+      const geocoder = new google.maps.Geocoder()
+      const result = await new Promise(resolve => {
+        geocoder.geocode({ address: fullCode }, (results, status) => {
+          if (status === 'OK' && results[0]) resolve(results[0])
+          else resolve(null)
+        })
+      })
+      if (result && result.geometry && result.geometry.location) {
+        const coords = { lat: result.geometry.location.lat(), lng: result.geometry.location.lng() }
+        await savePlaceByCoords(coords)
+        const curInp = document.getElementById('place-in')
+        if (curInp) curInp.value = ''
+        return
+      }
+    }
+
     // 단축 URL이면 먼저 펼치기
     if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
       const expanded = await expandShortUrl(raw)
@@ -1085,7 +1105,7 @@ async function doAddPlace() {
     let target = raw
     if (raw.startsWith('http')) {
       const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]{15,})/)
-      const pnM  = raw.match(/\/place\/([^/@?+]+)/)
+      const pnM  = raw.match(/\/place\/([^/@?]+)/)
       const pqM  = raw.match(/[?&]q=([^&]+)/)
       if (pnM)       target = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
       else if (pidM) target = pidM[1]
@@ -1145,6 +1165,7 @@ async function savePlaceByCoords(coords) {
       })
       if (result) {
         place.name = result.address_components?.[0]?.long_name || result.formatted_address || place.name
+        place.address = result.formatted_address || ''
         // place_id로 상세정보 추가 조회
         if (result.place_id) {
           const detail = await queryPlaces(result.place_id)
@@ -1275,9 +1296,17 @@ function queryPlaces(input) {
       doDetail(input)
     } else {
       svc.findPlaceFromQuery(
-        { query: input, fields: ['place_id', 'name', 'geometry'] },
+        { query: input, fields: ['place_id', 'name', 'geometry', 'types'] },
         (res, s) => {
-          if (s === 'OK' && res && res[0]) doDetail(res[0].place_id)
+          if (s === 'OK' && res && res[0]) {
+            let best = res[0]
+            // 입력어가 공항/터미널 등을 가리키면 types에 airport가 있는 결과 우선
+            if (/공항|airport|terminal|터미널/i.test(input)) {
+              const airportMatch = res.find(r => (r.types || []).includes('airport'))
+              if (airportMatch) best = airportMatch
+            }
+            doDetail(best.place_id)
+          }
           else { clearTimeout(timeout); finish(null) }
         }
       )
@@ -1301,7 +1330,7 @@ function queryPlacesNearby(name, coords) {
       (res, s) => {
         if (s === 'OK' && res && res[0]) {
           svc.getDetails(
-            { placeId: res[0].place_id, fields: ['name', 'types', 'opening_hours', 'geometry', 'business_status'] },
+            { placeId: res[0].place_id, fields: ['name', 'types', 'opening_hours', 'geometry', 'business_status', 'formatted_address'] },
             (r, s2) => {
               clearTimeout(timeout)
               if (s2 === 'OK') finish(parsePlaceResult(r))
@@ -1325,6 +1354,7 @@ function parsePlaceResult(r) {
     isOpen: oh && typeof oh.isOpen === 'function' ? oh.isOpen() : null,
     lat: r.geometry && r.geometry.location ? r.geometry.location.lat() : null,
     lng: r.geometry && r.geometry.location ? r.geometry.location.lng() : null,
+    address: r.formatted_address || '',
     memo: ''
   }
   return result
