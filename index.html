@@ -41,7 +41,7 @@ button{cursor:pointer}
 .tfoot{border-top:.5px solid #ddd;margin-top:16px;padding:12px 20px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .tmeta{flex:1;display:flex;flex-direction:column;gap:1px}
 .tml{letter-spacing:.06em;text-transform:uppercase;color:#888;line-height:1.25}
-.tml-date{font-size:13px;font-weight:700;color:#888}
+.tml-date{font-size:9px;font-weight:400;color:#888}
 .tml-info{font-size:9px;color:#999;font-weight:400}
 .tml-people{font-size:9px;font-weight:400;color:#999}
 .timg2{width:68px;height:68px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:20px}
@@ -804,8 +804,11 @@ async function savePlace(nameOrId, coords) {
     console.warn('Directions 계산 실패:', e)
   }
 
+  console.log('[savePlace] DB.addPlace 호출 직전, place:', place)
   DB.addPlace(state.tripId, state.dayId, place)
+  console.log('[savePlace] DB.addPlace 완료, 현재 trips:', DB.trips)
   renderPlaces()
+  console.log('[savePlace] renderPlaces 완료')
 }
 
 function openNameModal() {
@@ -828,15 +831,19 @@ function openNameModal() {
 
   const go = async () => {
     const v = document.getElementById('name-in').value.trim()
+    console.log('[go] 입력값:', v)
     if (!v) return
     const okBtn = document.getElementById('name-ok')
     okBtn.textContent = '추가 중…'
     okBtn.disabled = true
     try {
+      console.log('[go] savePlace 호출 시작')
       await savePlace(v)
+      console.log('[go] savePlace 완료')
     } catch (e) {
       console.error('장소 추가 오류:', e)
     } finally {
+      console.log('[go] closeModal 호출')
       closeModal()
     }
   }
