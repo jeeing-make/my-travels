@@ -43,7 +43,7 @@ button{cursor:pointer}
 .tml{letter-spacing:.06em;text-transform:uppercase;color:#888;line-height:1.6}
 .tml-date{font-size:13px;font-weight:700;color:#888}
 .tml-info{font-size:9px;color:#999;font-weight:400}
-.tml-people{font-size:11px;font-weight:500;color:#888}
+.tml-people{font-size:9px;font-weight:400;color:#999}
 .timg2{width:68px;height:68px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:20px}
 .timg2 img{width:100%;height:100%;object-fit:cover;display:block}
 .add-card{border-right:1px solid #000;border-bottom:1px solid #000;min-height:280px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;color:#ccc}
@@ -578,10 +578,15 @@ function renderPlaces() {
       const dur = place.dirDuration || '—'
       const dist = place.dirDistance ? ` · ${place.dirDistance}` : ''
       bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
-      if (prev.lat && place.lat) {
+      const hasCoords = (prev.lat != null && prev.lng != null && place.lat != null && place.lng != null)
+      if (hasCoords) {
         const mode = place.dirMode || 'walking'
         const url = `https://www.google.com/maps/dir/?api=1&origin=${prev.lat},${prev.lng}&destination=${place.lat},${place.lng}&travelmode=${mode}`
         bar.onclick = () => window.open(url, '_blank')
+      } else {
+        bar.style.opacity = '.4'
+        bar.style.cursor = 'default'
+        bar.title = '좌표 정보가 없어 경로를 열 수 없어요'
       }
       list.appendChild(bar)
     }
@@ -593,14 +598,14 @@ function renderPlaces() {
       <div class="ptop">
         <div class="pleft">
           <div class="pcat">[ ${cat.e} ${cat.l} ]</div>
-          <div class="pname">${place.name}</div>
+          <div class="pname" data-pid="${place.id}" style="cursor:text">${place.name}</div>
         </div>
         <div class="pright">
           ${place.isOpen === true ? '<span class="open-b">OPEN</span>' : place.isOpen === false ? '<span class="closed-b">CLOSED</span>' : ''}
           <button class="delbtn" data-pid="${place.id}">삭제</button>
         </div>
       </div>
-      <div class="phrs">${place.hours || '영업시간 정보 없음'}</div>
+      <div class="phrs">${place.hours || '영업시간 정보 없음'}${place.lat ? ` · 📍 ${place.lat.toFixed(4)}, ${place.lng.toFixed(4)}` : ''}</div>
       <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
 
     item.querySelector('.delbtn').onclick = () => {
@@ -609,6 +614,27 @@ function renderPlaces() {
     }
     item.querySelector('textarea').onchange = e => {
       DB.updatePlace(state.tripId, state.dayId, place.id, { memo: e.target.value })
+    }
+    // 이름 클릭 → 인라인 편집
+    const nameEl = item.querySelector('.pname')
+    nameEl.onclick = () => {
+      const input = document.createElement('input')
+      input.className = 'min'
+      input.value = place.name
+      input.style.fontSize = '14px'
+      input.style.fontWeight = '700'
+      nameEl.replaceWith(input)
+      input.focus()
+      input.select()
+      const commit = () => {
+        const v = input.value.trim()
+        if (v && v !== place.name) {
+          DB.updatePlace(state.tripId, state.dayId, place.id, { name: v })
+        }
+        renderPlaces()
+      }
+      input.onblur = commit
+      input.onkeydown = e => { if (e.key === 'Enter') commit() }
     }
     list.appendChild(item)
   })
@@ -827,7 +853,7 @@ function queryPlaces(input) {
 
     const svc = new google.maps.places.PlacesService(document.createElement('div'))
     const isId = /^ChIJ|^Eh/.test(input) || (input.length > 25 && !/\s/.test(input))
-    const fields = ['name', 'types', 'opening_hours', 'geometry']
+    const fields = ['name', 'types', 'opening_hours', 'geometry', 'business_status', 'formatted_address']
 
     const doDetail = id => {
       svc.getDetails({ placeId: id, fields }, (r, s) => {
@@ -843,6 +869,7 @@ function queryPlaces(input) {
       svc.findPlaceFromQuery(
         { query: input, fields: ['place_id', 'name', 'geometry'] },
         (res, s) => {
+          console.log('findPlaceFromQuery 상태:', s, '결과:', res)
           if (s === 'OK' && res && res[0]) doDetail(res[0].place_id)
           else { clearTimeout(timeout); finish(null) }
         }
@@ -852,18 +879,21 @@ function queryPlaces(input) {
 }
 
 function parsePlaceResult(r) {
+  console.log('Places API 결과:', r)
   const oh = r.opening_hours
   const dayOfWeek = new Date().getDay()
   const idx = dayOfWeek === 0 ? 6 : dayOfWeek - 1
-  return {
+  const result = {
     name: r.name,
     category: guessCat(r.types || []),
     hours: oh && oh.weekday_text ? (oh.weekday_text[idx] || '') : '',
-    isOpen: oh && oh.isOpen ? oh.isOpen() : null,
+    isOpen: oh && typeof oh.isOpen === 'function' ? oh.isOpen() : null,
     lat: r.geometry && r.geometry.location ? r.geometry.location.lat() : null,
     lng: r.geometry && r.geometry.location ? r.geometry.location.lng() : null,
     memo: ''
   }
+  console.log('파싱 결과:', result)
+  return result
 }
 
 function calcDir(origin, dest) {
