@@ -804,7 +804,13 @@ function renderP2Hotels(trip) {
     row.querySelector('.hotel-del').onclick = () => {
       const list = DB.trips
       const t = list.find(x => x.id === trip.id)
-      t.hotels = t.hotels.filter(x => x.id !== hotel.id)
+      if (hotel.id) {
+        t.hotels = t.hotels.filter(x => x.id !== hotel.id)
+      } else {
+        // id가 없는 기존 데이터 — 동일 내용 첫 항목 제거
+        const i = t.hotels.findIndex(x => !x.id && x.input === hotel.input && x.checkin === hotel.checkin && x.checkout === hotel.checkout)
+        if (i >= 0) t.hotels.splice(i, 1)
+      }
       DB.save(list)
       renderP2(); renderP3IfActive()
     }
