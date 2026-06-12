@@ -666,7 +666,6 @@ async function doAddPlace() {
   const inp = document.getElementById('place-in')
   const btn = document.getElementById('place-btn')
   let raw = inp.value.trim()
-  console.log('[doAddPlace] 시작, raw:', raw)
   if (!raw) return
 
   btn.textContent = '불러오는 중…'
@@ -717,8 +716,6 @@ async function doAddPlace() {
         return
       }
     }
-
-    console.log('[doAddPlace] target:', target, 'coords:', coords)
     if (target) {
       await savePlace(target, coords)
     } else if (coords) {
@@ -726,13 +723,11 @@ async function doAddPlace() {
     } else {
       await savePlace(raw, coords)
     }
-    console.log('[doAddPlace] savePlace 완료')
     const curInp = document.getElementById('place-in')
     if (curInp) curInp.value = ''
   } catch (e) {
     console.error('[doAddPlace] 에러:', e)
   } finally {
-    console.log('[doAddPlace] finally')
     const curBtn = document.getElementById('place-btn')
     if (curBtn) { curBtn.textContent = '추가 →'; curBtn.disabled = false }
   }
@@ -778,15 +773,12 @@ async function savePlaceByCoords(coords) {
 }
 
 async function savePlace(nameOrId, coords) {
-  console.log('[savePlace] 진입, nameOrId:', nameOrId, 'coords:', coords)
   let place = { name: nameOrId, category: 'attraction', hours: '', isOpen: null, memo: '' }
   if (coords) { place.lat = coords.lat; place.lng = coords.lng }
 
   try {
     if (typeof google !== 'undefined' && google.maps && google.maps.places) {
-      console.log('[savePlace] queryPlaces 호출')
       const detail = await queryPlaces(nameOrId)
-      console.log('[savePlace] queryPlaces 결과:', detail)
       if (detail) {
         place = Object.assign(place, detail)
         if (coords) { place.lat = coords.lat; place.lng = coords.lng }
@@ -813,12 +805,8 @@ async function savePlace(nameOrId, coords) {
   } catch (e) {
     console.warn('Directions 계산 실패:', e)
   }
-
-  console.log('[savePlace] DB.addPlace 호출 직전, place:', place)
   DB.addPlace(state.tripId, state.dayId, place)
-  console.log('[savePlace] DB.addPlace 완료, 현재 trips:', DB.trips)
   renderPlaces()
-  console.log('[savePlace] renderPlaces 완료')
 }
 
 function openNameModal() {
@@ -841,19 +829,15 @@ function openNameModal() {
 
   const go = async () => {
     const v = document.getElementById('name-in').value.trim()
-    console.log('[go] 입력값:', v)
     if (!v) return
     const okBtn = document.getElementById('name-ok')
     okBtn.textContent = '추가 중…'
     okBtn.disabled = true
     try {
-      console.log('[go] savePlace 호출 시작')
       await savePlace(v)
-      console.log('[go] savePlace 완료')
     } catch (e) {
       console.error('장소 추가 오류:', e)
     } finally {
-      console.log('[go] closeModal 호출')
       closeModal()
     }
   }
@@ -889,7 +873,6 @@ function queryPlaces(input) {
       svc.findPlaceFromQuery(
         { query: input, fields: ['place_id', 'name', 'geometry'] },
         (res, s) => {
-          console.log('findPlaceFromQuery 상태:', s, '결과:', res)
           if (s === 'OK' && res && res[0]) doDetail(res[0].place_id)
           else { clearTimeout(timeout); finish(null) }
         }
@@ -912,7 +895,6 @@ function queryPlacesNearby(name, coords) {
         locationBias: new google.maps.Circle({ center: coords, radius: 200 })
       },
       (res, s) => {
-        console.log('findPlaceFromQuery(nearby) 상태:', s, '결과:', res)
         if (s === 'OK' && res && res[0]) {
           svc.getDetails(
             { placeId: res[0].place_id, fields: ['name', 'types', 'opening_hours', 'geometry', 'business_status'] },
@@ -929,7 +911,6 @@ function queryPlacesNearby(name, coords) {
 }
 
 function parsePlaceResult(r) {
-  console.log('Places API 결과:', r)
   const oh = r.opening_hours
   const dayOfWeek = new Date().getDay()
   const idx = dayOfWeek === 0 ? 6 : dayOfWeek - 1
@@ -942,14 +923,13 @@ function parsePlaceResult(r) {
     lng: r.geometry && r.geometry.location ? r.geometry.location.lng() : null,
     memo: ''
   }
-  console.log('파싱 결과:', result)
   return result
 }
 
 function calcDir(origin, dest) {
   return new Promise(resolve => {
     let done = false
-    const finish = v => { if (!done) { done = true; finish(v) } }
+    const finish = v => { if (!done) { done = true; resolve(v) } }
     setTimeout(() => finish(null), 5000)
     const svc = new google.maps.DirectionsService()
     svc.route(
