@@ -99,6 +99,9 @@ button{cursor:pointer}
 .pmemo::placeholder{color:#ccc;font-style:italic}
 .delbtn{font-size:8px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888}
 .delbtn:hover{border-color:#000;color:#000}
+.movebtn{font-size:8px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888;line-height:1.4}
+.movebtn:hover:not(:disabled){border-color:#000;color:#000}
+.movebtn:disabled{opacity:.25;cursor:default}
 .dirbar{padding:8px 16px;background:#f7f7f7;display:flex;align-items:center;gap:8px;cursor:pointer;border-bottom:.5px solid #ddd}
 .dirbar:hover{background:#e8e8e8}
 .dirline{height:.5px;flex:1;background:#000}
@@ -138,6 +141,25 @@ button{cursor:pointer}
 .photo-del{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 12px;color:#888;display:none;cursor:pointer}
 .photo-del:hover{border-color:#c00;color:#c00}
 .photo-prev{width:80px;height:56px;object-fit:cover;border:1px solid #000;margin-top:6px;display:none}
+
+/* 숙소 목록 */
+.hotel-list{display:flex;flex-direction:column;gap:8px}
+.hotel-row{border:.5px solid #ddd;padding:10px;display:flex;flex-direction:column;gap:6px}
+.hotel-row-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.hotel-row-top input{font-size:11px;border:.5px solid #ddd;padding:6px 8px;outline:none;flex:1;color:#000;background:#fff}
+.hotel-row-top input:focus{border-color:#000}
+.hotel-dates{display:flex;gap:8px}
+.hotel-dates input{font-size:11px;border:.5px solid #ddd;padding:6px 8px;outline:none;flex:1;color:#000;background:#fff}
+.hotel-del{font-size:9px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:4px 8px;color:#888;flex-shrink:0}
+.hotel-del:hover{border-color:#c00;color:#c00}
+.hotel-add{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:8px;color:#000;align-self:flex-start}
+.hotel-add:hover{background:#000;color:#fff}
+
+/* 3페이지 — 숙소 표시 항목 */
+.hotel-marker{padding:10px 16px;background:#fafafa;border-bottom:.5px solid #ddd;display:flex;align-items:center;gap:8px}
+.hotel-marker-icon{font-size:16px;flex-shrink:0}
+.hotel-marker-text{font-size:11px;color:#555;letter-spacing:.02em}
+.hotel-marker-name{font-weight:700;color:#000}
 </style>
 </head>
 <body>
@@ -286,6 +308,21 @@ const DB = {
     if (!day) return
     day.places = day.places.filter(p => p.id !== placeId)
     this.save(list)
+  },
+  movePlace(tripId, dayId, placeId, dir) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    const day = trip.days.find(d => d.id === dayId)
+    if (!day) return
+    const i = day.places.findIndex(p => p.id === placeId)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= day.places.length) return
+    const arr = day.places
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+    // 순서 변경 후 이동 정보(dirMode/dirDuration/dirDistance)는 재계산 필요하므로 초기화
+    arr.forEach(p => { delete p.dirMode; delete p.dirDuration; delete p.dirDistance })
+    this.save(list)
   }
 }
 
@@ -336,10 +373,12 @@ const CAT = {
   bar:        { e: '🍺',  l: '바·술집' },
   hotel:      { e: '🏨',  l: '숙소' },
   attraction: { e: '📸',  l: '관광지' },
-  shopping:   { e: '🛒',  l: '쇼핑' }
+  shopping:   { e: '🛒',  l: '쇼핑' },
+  airport:    { e: '✈️',  l: '공항' }
 }
 function guessCat(types) {
   types = types || []
+  if (types.some(t => ['airport'].includes(t))) return 'airport'
   if (types.some(t => ['lodging','hotel'].includes(t))) return 'hotel'
   if (types.some(t => ['bar','night_club'].includes(t))) return 'bar'
   if (types.some(t => t.includes('cafe') || t.includes('coffee'))) return 'cafe'
@@ -474,6 +513,21 @@ function renderP2() {
   document.getElementById('p2-sub').textContent = `${trip.dateStart || ''} – ${trip.dateEnd || ''}  ·  ${trip.countries || ''}`
   document.getElementById('p2-ti').textContent = cleanName(trip.name)
 
+  // 날짜 기준 자동 정렬 (날짜 없는 항목은 뒤로)
+  if (trip.days && trip.days.length > 1) {
+    const sorted = [...trip.days].sort((a, b) => {
+      if (!a.date && !b.date) return 0
+      if (!a.date) return 1
+      if (!b.date) return -1
+      return a.date.localeCompare(b.date)
+    })
+    const changed = sorted.some((d, i) => d.id !== trip.days[i].id)
+    if (changed) {
+      trip.days = sorted
+      DB.updateTrip(trip.id, { days: sorted })
+    }
+  }
+
   const list = document.getElementById('p2-list')
   list.innerHTML = ''
 
@@ -484,10 +538,14 @@ function renderP2() {
       ? (day.places || []).map(p => `<span class="rstop">${CAT[p.category]?.e || '📍'} ${p.name}</span><span class="rarr">→</span>`).join('').replace(/<span class="rarr">→<\/span>$/, '')
       : '<span style="font-size:9px;color:#ccc;letter-spacing:.08em;text-transform:uppercase">장소 없음</span>'
 
+    // 숙소(hotel) 포함 여부
+    const hasHotel = (day.places || []).some(p => p.category === 'hotel')
+    const hotelIcon = hasHotel ? ' 🏨' : ''
+
     row.innerHTML = `
       <div class="rday"><span class="rday-lbl">Day ${i + 1}</span></div>
       <div class="rbody">
-        <div class="rdate">${day.date || ''} ${trip.emoji || ''}</div>
+        <div class="rdate">${day.date || ''} ${trip.emoji || ''}${hotelIcon}</div>
         <div class="rstops">${stopsHtml}</div>
       </div>
       <div class="rbtns">
@@ -560,6 +618,28 @@ function renderP3() {
   inp.onkeydown = e => { if (e.key === 'Enter') doAddPlace() }
 }
 
+function getHotelForDate(trip, date, position) {
+  // position: 'start' = 그날 아침 체크아웃하는 숙소 (전날 밤 묵었던 곳, checkout == date)
+  //           'end'   = 그날 밤 체크인되어 있는 숙소 (checkin <= date < checkout)
+  if (!trip.hotels || !date) return null
+  for (const hotel of trip.hotels) {
+    if (!hotel.checkin || !hotel.checkout) continue
+    if (position === 'start') {
+      if (hotel.checkin <= date && date <= hotel.checkout) return hotel
+    } else {
+      if (hotel.checkin <= date && date < hotel.checkout) return hotel
+    }
+  }
+  return null
+}
+
+function renderHotelMarker(hotel, label) {
+  const div = document.createElement('div')
+  div.className = 'hotel-marker'
+  div.innerHTML = `<span class="hotel-marker-icon">🏨</span><span class="hotel-marker-text">${label} <span class="hotel-marker-name">${hotel.name || '숙소'}</span></span>`
+  return div
+}
+
 function renderPlaces() {
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
@@ -569,24 +649,39 @@ function renderPlaces() {
   const list = document.getElementById('p3-places')
   list.innerHTML = ''
 
+  // 일정 시작 — 그날 아침 출발 전 묵었던 숙소
+  const hotelStart = getHotelForDate(trip, day.date, 'start')
+  if (hotelStart) list.appendChild(renderHotelMarker(hotelStart, '체크아웃 / 출발 ·'))
+
   ;(day.places || []).forEach((place, i) => {
     if (i > 0) {
       const prev = day.places[i - 1]
       const bar = document.createElement('div')
       bar.className = 'dirbar'
       const modeIcon = place.dirMode === 'transit' ? '🚇' : place.dirMode === 'driving' ? '🚕' : '🚶'
-      const dur = place.dirDuration || '—'
-      const dist = place.dirDistance ? ` · ${place.dirDistance}` : ''
-      bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
       const hasCoords = (prev.lat != null && prev.lng != null && place.lat != null && place.lng != null)
-      if (hasCoords) {
-        const mode = place.dirMode || 'walking'
-        const url = `https://www.google.com/maps/dir/?api=1&origin=${prev.lat},${prev.lng}&destination=${place.lat},${place.lng}&travelmode=${mode}`
-        bar.onclick = () => window.open(url, '_blank')
+
+      if (!place.dirDuration && hasCoords && typeof google !== 'undefined' && google.maps) {
+        bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ 계산 중… ]</div><div class="dirline"></div>`
+        calcDir(prev, place).then(dir => {
+          if (dir) {
+            DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
+            renderPlaces()
+          }
+        })
       } else {
-        bar.style.opacity = '.4'
-        bar.style.cursor = 'default'
-        bar.title = '좌표 정보가 없어 경로를 열 수 없어요'
+        const dur = place.dirDuration || '—'
+        const dist = place.dirDistance ? ` · ${place.dirDistance}` : ''
+        bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
+        if (hasCoords) {
+          const mode = place.dirMode || 'walking'
+          const url = `https://www.google.com/maps/dir/?api=1&origin=${prev.lat},${prev.lng}&destination=${place.lat},${place.lng}&travelmode=${mode}`
+          bar.onclick = () => window.open(url, '_blank')
+        } else {
+          bar.style.opacity = '.4'
+          bar.style.cursor = 'default'
+          bar.title = '좌표 정보가 없어 경로를 열 수 없어요'
+        }
       }
       list.appendChild(bar)
     }
@@ -602,6 +697,8 @@ function renderPlaces() {
         </div>
         <div class="pright">
           ${place.isOpen === true ? '<span class="open-b">OPEN</span>' : place.isOpen === false ? '<span class="closed-b">CLOSED</span>' : ''}
+          <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="movebtn" data-move="1" ${i === (day.places.length - 1) ? 'disabled' : ''}>↓</button>
           <button class="delbtn" data-pid="${place.id}">삭제</button>
         </div>
       </div>
@@ -612,6 +709,13 @@ function renderPlaces() {
       DB.deletePlace(state.tripId, state.dayId, place.id)
       renderPlaces()
     }
+    item.querySelectorAll('.movebtn').forEach(btn => {
+      btn.onclick = () => {
+        const dir = parseInt(btn.dataset.move, 10)
+        DB.movePlace(state.tripId, state.dayId, place.id, dir)
+        renderPlaces()
+      }
+    })
     item.querySelector('textarea').onchange = e => {
       DB.updatePlace(state.tripId, state.dayId, place.id, { memo: e.target.value })
     }
@@ -638,6 +742,10 @@ function renderPlaces() {
     }
     list.appendChild(item)
   })
+
+  // 일정 끝 — 그날 밤 묵을 숙소
+  const hotelEnd = getHotelForDate(trip, day.date, 'end')
+  if (hotelEnd) list.appendChild(renderHotelMarker(hotelEnd, '체크인 / 숙박 ·'))
 }
 
 /* =========================================================
@@ -993,6 +1101,8 @@ function openTripModal(editId) {
   // 현재 사진 상태 (메모리에서 관리, 저장 시점에 trip에 적용)
   let photo1 = trip ? (trip.photo1 || null) : null
   let photo2 = trip ? (trip.photo2 || null) : null
+  // 숙소 목록 (메모리에서 관리)
+  let hotels = trip && trip.hotels ? JSON.parse(JSON.stringify(trip.hotels)) : []
 
   modal.innerHTML = `<div class="mbox">
     <div class="mhd">
@@ -1024,6 +1134,12 @@ function openTripModal(editId) {
       <div class="mfield">
         <span class="mlbl">같이 간 사람</span>
         <input class="min" id="f-companions" value="${trip ? trip.companions || '' : ''}" placeholder="혼자 / 홍길동"/>
+      </div>
+      <div class="mfield">
+        <span class="mlbl">🏨 숙소</span>
+        <span class="mhint">구글맵 링크 또는 이름 + 체크인/체크아웃 날짜. 해당 기간의 Day 일정 첫/끝에 자동으로 표시됩니다.</span>
+        <div class="hotel-list" id="hotel-list"></div>
+        <button type="button" class="hotel-add" id="hotel-add">+ 숙소 추가</button>
       </div>
       <div class="mfield">
         <span class="mlbl">사진 1 — 카드 중간 왼쪽 (둥근 프레임)</span>
@@ -1096,9 +1212,68 @@ function openTripModal(editId) {
     document.getElementById('del-p2').style.display = 'none'
   }
 
-  document.getElementById('btn-save').onclick = () => {
+  // ── 숙소 목록 렌더링 ──
+  function renderHotelList() {
+    const wrap = document.getElementById('hotel-list')
+    wrap.innerHTML = ''
+    hotels.forEach((hotel, idx) => {
+      const row = document.createElement('div')
+      row.className = 'hotel-row'
+      row.innerHTML = `
+        <div class="hotel-row-top">
+          <input type="text" class="h-name" placeholder="구글맵 링크 또는 호텔 이름" value="${hotel.input || ''}"/>
+          <button type="button" class="hotel-del">제거</button>
+        </div>
+        <div class="hotel-dates">
+          <input type="date" class="h-checkin" value="${hotel.checkin || ''}"/>
+          <input type="date" class="h-checkout" value="${hotel.checkout || ''}"/>
+        </div>`
+      row.querySelector('.h-name').onchange = e => { hotels[idx].input = e.target.value.trim(); hotels[idx].name = null; hotels[idx].lat = null; hotels[idx].lng = null }
+      row.querySelector('.h-checkin').onchange = e => { hotels[idx].checkin = e.target.value }
+      row.querySelector('.h-checkout').onchange = e => { hotels[idx].checkout = e.target.value }
+      row.querySelector('.hotel-del').onclick = () => { hotels.splice(idx, 1); renderHotelList() }
+      wrap.appendChild(row)
+    })
+  }
+  renderHotelList()
+  document.getElementById('hotel-add').onclick = () => {
+    hotels.push({ input: '', checkin: '', checkout: '', name: null, lat: null, lng: null })
+    renderHotelList()
+  }
+
+  document.getElementById('btn-save').onclick = async () => {
     const name = document.getElementById('f-name').value.trim()
     if (!name) { alert('여행 이름을 입력해주세요'); return }
+
+    const saveBtn = document.getElementById('btn-save')
+    saveBtn.textContent = '저장 중…'
+    saveBtn.disabled = true
+
+    // 숙소별로 이름/좌표 추출 (입력값이 변경된 경우에만)
+    for (const hotel of hotels) {
+      if (!hotel.input) continue
+      if (hotel.name && hotel.lat) continue // 이미 처리됨
+      let raw = hotel.input
+      try {
+        if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
+          const expanded = await expandShortUrl(raw)
+          if (expanded) raw = expanded
+        }
+        let coords = null
+        if (raw.startsWith('http')) {
+          const m = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/) || raw.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/)
+          if (m) coords = { lat: parseFloat(m[1]), lng: parseFloat(m[2]) }
+          const pnM = raw.match(/\/place\/([^/@?+]+)/)
+          if (pnM) hotel.name = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
+          else hotel.name = hotel.name || '숙소'
+          if (coords) { hotel.lat = coords.lat; hotel.lng = coords.lng }
+        } else {
+          hotel.name = raw
+        }
+      } catch (e) {
+        hotel.name = hotel.name || raw
+      }
+    }
 
     const data = {
       name,
@@ -1109,6 +1284,7 @@ function openTripModal(editId) {
       companions:  document.getElementById('f-companions').value.trim(),
       photo1,
       photo2,
+      hotels: hotels.filter(h => h.input),
     }
 
     try {
@@ -1126,6 +1302,8 @@ function openTripModal(editId) {
         alert('저장 중 오류가 발생했어요: ' + (e && e.message ? e.message : e))
       }
       console.error('저장 오류:', e)
+      saveBtn.textContent = editId ? '저장 →' : '추가 →'
+      saveBtn.disabled = false
     }
   }
 }
