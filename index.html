@@ -73,6 +73,7 @@ button{cursor:pointer}
 .rmenubtn{font-size:12px;color:#ccc;background:none;border:none;padding:0 6px;line-height:1}
 .rmenubtn:hover{color:#000}
 .rmenu{display:flex;gap:5px;align-items:center}
+.rdate-row{display:flex;align-items:center;gap:4px}
 
 /* ── P3 ── */
 .p3-hd{padding:24px 20px 16px;border-bottom:1px solid #000}
@@ -148,6 +149,7 @@ button{cursor:pointer}
 /* 숙소 목록 */
 .hotel-list{display:flex;flex-direction:column;gap:8px}
 .hotel-section{padding:16px 20px;border-bottom:1px solid #000;display:flex;flex-direction:column;gap:8px}
+#hotel-section-body{gap:8px}
 .hotel-section-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#000;font-weight:500}
 .hotel-section-hint{font-size:8px;color:#aaa;line-height:1.5}
 .hotel-resolved{font-size:9px;color:#0a0;letter-spacing:.02em}
@@ -199,10 +201,12 @@ button{cursor:pointer}
     <div class="p2-ti" id="p2-ti"></div>
   </div>
   <div class="hotel-section">
-    <div class="hotel-section-title">[ 🏨 숙소 ]</div>
-    <div class="hotel-section-hint">구글맵 링크 또는 이름 + 체크인/체크아웃 날짜. 해당 기간 Day 일정에 도착/출발로 자동 표시됩니다.</div>
-    <div class="hotel-list" id="p2-hotel-list"></div>
-    <button type="button" class="hotel-add" id="p2-hotel-add">+ 숙소 추가</button>
+    <div class="hotel-section-title" id="hotel-section-toggle" style="cursor:pointer">[ 🏨 숙소 ▾ ]</div>
+    <div id="hotel-section-body" style="display:none">
+      <div class="hotel-section-hint">구글지도 링크 입력 시 자동으로 숙소명을 가져와요. 체크인/체크아웃 날짜를 입력하면 해당 기간 Day 일정에 도착/출발로 자동 표시됩니다.</div>
+      <div class="hotel-list" id="p2-hotel-list"></div>
+      <button type="button" class="hotel-add" id="p2-hotel-add">+ 숙소 추가</button>
+    </div>
   </div>
   <div class="rlist" id="p2-list"></div>
 </div>
@@ -602,16 +606,18 @@ function renderP2() {
     row.innerHTML = `
       <div class="rday"><span class="rday-lbl">Day ${i + 1}</span></div>
       <div class="rbody">
-        <div class="rdate">${day.date || ''} ${dayFlag}</div>
+        <div class="rdate-row">
+          <div class="rdate">${day.date || ''} ${dayFlag}</div>
+          <button class="rmenubtn" data-action="menu">⋮</button>
+          <div class="rmenu" style="display:none">
+            <button class="rbtn" data-action="edit" data-tid="${trip.id}" data-did="${day.id}">수정</button>
+            <button class="rbtn" data-action="del"  data-tid="${trip.id}" data-did="${day.id}">삭제</button>
+          </div>
+        </div>
         <div class="rstops">${stopsHtml}</div>
       </div>
       <div class="rbtns">
-        <button class="rmenubtn" data-action="menu">⋮</button>
-        <div class="rmenu" style="display:none">
-          <button class="rbtn" data-action="edit" data-tid="${trip.id}" data-did="${day.id}">수정</button>
-          <button class="rbtn" data-action="del"  data-tid="${trip.id}" data-did="${day.id}">삭제</button>
-        </div>
-        <span style="font-size:10px;color:#ccc;margin-left:2px">→</span>
+        <span style="font-size:10px;color:#ccc">→</span>
       </div>`
 
     row.addEventListener('click', e => {
@@ -659,6 +665,16 @@ function renderP3() {
 
   document.getElementById('p3-ey').textContent = `[ Day ${dayIdx + 1} ] — ${cleanName(trip.name)}`
   document.getElementById('p3-ti').textContent = dateObj ? `${MON[dateObj.getMonth()]}\n${dateObj.getDate()}.` : ''
+
+  // 임시 디버그 패널
+  let dbg = document.getElementById('debug-panel')
+  if (!dbg) {
+    dbg = document.createElement('div')
+    dbg.id = 'debug-panel'
+    dbg.style = 'font-size:9px;color:#c00;background:#fff3f3;padding:8px 16px;border-bottom:1px solid #c00;white-space:pre-wrap;word-break:break-all'
+    document.getElementById('p3').insertBefore(dbg, document.getElementById('p3-places'))
+  }
+  dbg.textContent = `[DEBUG] trip.lat=${trip.lat} trip.lon=${trip.lon} | day.date=${day.date} | day.weather=${JSON.stringify(day.weather)} | hotels=${JSON.stringify(trip.hotels)}`
 
   const oi = document.getElementById('outfit-in')
   oi.value = day.outfit || ''
@@ -780,6 +796,15 @@ function renderP2Hotels(trip) {
 function renderP3IfActive() {
   if (state.page === 'p3') renderP3()
 }
+
+document.getElementById('hotel-section-toggle')?.addEventListener('click', () => {
+  const body = document.getElementById('hotel-section-body')
+  const toggle = document.getElementById('hotel-section-toggle')
+  const open = body.style.display !== 'none'
+  body.style.display = open ? 'none' : 'flex'
+  if (!open) body.style.flexDirection = 'column'
+  toggle.textContent = open ? '[ 🏨 숙소 ▾ ]' : '[ 🏨 숙소 ▴ ]'
+})
 
 document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
   const trip = DB.getTrip(state.tripId)
