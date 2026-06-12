@@ -70,6 +70,9 @@ button{cursor:pointer}
 .rbtn:hover{border-color:#000;color:#000}
 .radd{padding:14px 16px;border-bottom:.5px solid #ddd;cursor:pointer;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888}
 .radd:hover{background:#f5f5f5;color:#000}
+.rmenubtn{font-size:12px;color:#ccc;background:none;border:none;padding:0 6px;line-height:1}
+.rmenubtn:hover{color:#000}
+.rmenu{display:flex;gap:5px;align-items:center}
 
 /* ── P3 ── */
 .p3-hd{padding:24px 20px 16px;border-bottom:1px solid #000}
@@ -148,6 +151,15 @@ button{cursor:pointer}
 .hotel-section-title{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#000;font-weight:500}
 .hotel-section-hint{font-size:8px;color:#aaa;line-height:1.5}
 .hotel-resolved{font-size:9px;color:#0a0;letter-spacing:.02em}
+.hotel-summary{display:flex;align-items:center;gap:10px;border:.5px solid #ddd;padding:8px 10px}
+.hotel-summary-icon{font-size:16px;flex-shrink:0}
+.hotel-summary-text{flex:1;display:flex;flex-direction:column;gap:2px}
+.hotel-summary-name{font-size:11px;font-weight:700;color:#000}
+.hotel-summary-dates{font-size:9px;color:#888}
+.hotel-edit{font-size:9px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:4px 8px;color:#888;flex-shrink:0}
+.hotel-edit:hover{border-color:#000;color:#000}
+.hotel-done{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:6px 10px;color:#000;align-self:flex-start}
+.hotel-done:hover{background:#000;color:#fff}
 .hotel-row{border:.5px solid #ddd;padding:10px;display:flex;flex-direction:column;gap:6px}
 .hotel-row-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .hotel-row-top input{font-size:11px;border:.5px solid #ddd;padding:6px 8px;outline:none;flex:1;color:#000;background:#fff}
@@ -188,7 +200,7 @@ button{cursor:pointer}
   </div>
   <div class="hotel-section">
     <div class="hotel-section-title">[ 🏨 숙소 ]</div>
-    <div class="hotel-section-hint">구글맵 링크 또는 이름 + 체크인/체크아웃 날짜. 해당 기간 Day 일정의 시작/끝에 자동 표시됩니다.</div>
+    <div class="hotel-section-hint">구글맵 링크 또는 이름 + 체크인/체크아웃 날짜. 해당 기간 Day 일정에 도착/출발로 자동 표시됩니다.</div>
     <div class="hotel-list" id="p2-hotel-list"></div>
     <button type="button" class="hotel-add" id="p2-hotel-add">+ 숙소 추가</button>
   </div>
@@ -517,6 +529,40 @@ function renderP1() {
 /* =========================================================
    PAGE 2
    ========================================================= */
+// 국가코드(ISO 2자) -> 국기 이모지
+function countryCodeToFlag(code) {
+  if (!code || code.length !== 2) return ''
+  const base = 127397
+  return String.fromCodePoint(...code.toUpperCase().split('').map(c => c.charCodeAt(0) + base))
+}
+
+// Day의 첫/끝 장소 좌표로 국가 조회 -> day.countryFlag 캐시
+async function resolveDayCountryFlag(trip, day) {
+  if (typeof google === 'undefined' || !google.maps) return
+  const places = day.places || []
+  const first = places[0]
+  if (!first || first.lat == null) return
+  try {
+    const geocoder = new google.maps.Geocoder()
+    const result = await new Promise(resolve => {
+      geocoder.geocode({ location: { lat: first.lat, lng: first.lng } }, (results, status) => {
+        if (status === 'OK' && results[0]) resolve(results[0])
+        else resolve(null)
+      })
+    })
+    if (result) {
+      const countryComp = result.address_components.find(c => c.types.includes('country'))
+      if (countryComp) {
+        const flag = countryCodeToFlag(countryComp.short_name)
+        if (flag) {
+          DB.updateDay(trip.id, day.id, { countryFlag: flag })
+          renderP2()
+        }
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
 function renderP2() {
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
@@ -550,19 +596,21 @@ function renderP2() {
       ? (day.places || []).map(p => `<span class="rstop">${CAT[p.category]?.e || '📍'} ${p.name}</span><span class="rarr">→</span>`).join('').replace(/<span class="rarr">→<\/span>$/, '')
       : '<span style="font-size:9px;color:#ccc;letter-spacing:.08em;text-transform:uppercase">장소 없음</span>'
 
-    // 숙소(hotel) 포함 여부 — trip.hotels 기반
-    const hasHotel = !!(getHotelForDate(trip, day.date, 'start') || getHotelForDate(trip, day.date, 'end'))
-    const hotelIcon = hasHotel ? ' 🏨' : ''
+    // 날짜별 국가 이모지 — 캐시된 값 사용, 없으면 비동기로 조회 후 갱신
+    const dayFlag = day.countryFlag || trip.emoji || ''
 
     row.innerHTML = `
       <div class="rday"><span class="rday-lbl">Day ${i + 1}</span></div>
       <div class="rbody">
-        <div class="rdate">${day.date || ''} ${trip.emoji || ''}${hotelIcon}</div>
+        <div class="rdate">${day.date || ''} ${dayFlag}</div>
         <div class="rstops">${stopsHtml}</div>
       </div>
       <div class="rbtns">
-        <button class="rbtn" data-action="edit" data-tid="${trip.id}" data-did="${day.id}">수정</button>
-        <button class="rbtn" data-action="del"  data-tid="${trip.id}" data-did="${day.id}">삭제</button>
+        <button class="rmenubtn" data-action="menu">⋮</button>
+        <div class="rmenu" style="display:none">
+          <button class="rbtn" data-action="edit" data-tid="${trip.id}" data-did="${day.id}">수정</button>
+          <button class="rbtn" data-action="del"  data-tid="${trip.id}" data-did="${day.id}">삭제</button>
+        </div>
         <span style="font-size:10px;color:#ccc;margin-left:2px">→</span>
       </div>`
 
@@ -570,7 +618,10 @@ function renderP2() {
       const btn = e.target.closest('[data-action]')
       if (btn) {
         e.stopPropagation()
-        if (btn.dataset.action === 'edit') openDayModal(trip.id, day.id)
+        if (btn.dataset.action === 'menu') {
+          const menu = row.querySelector('.rmenu')
+          menu.style.display = menu.style.display === 'none' ? 'flex' : 'none'
+        } else if (btn.dataset.action === 'edit') openDayModal(trip.id, day.id)
         else if (btn.dataset.action === 'del') {
           if (confirm('이 날짜를 삭제할까요?')) { DB.deleteDay(trip.id, day.id); renderP2() }
         }
@@ -579,6 +630,11 @@ function renderP2() {
       }
     })
     list.appendChild(row)
+
+    // 국가 이모지 비동기 조회 (캐시 없을 때만)
+    if (!day.countryFlag && day.places && day.places.length) {
+      resolveDayCountryFlag(trip, day)
+    }
   })
 
   const addRow = document.createElement('div')
@@ -639,43 +695,77 @@ function renderP2Hotels(trip) {
   hotels.forEach((hotel, idx) => {
     const row = document.createElement('div')
     row.className = 'hotel-row'
-    row.innerHTML = `
-      <div class="hotel-row-top">
-        <input type="text" class="h-name" placeholder="구글맵 링크 또는 호텔 이름" value="${hotel.input || ''}"/>
-        <button type="button" class="hotel-del">제거</button>
-      </div>
-      <div class="hotel-dates">
-        <input type="date" class="h-checkin" value="${hotel.checkin || ''}"/>
-        <input type="date" class="h-checkout" value="${hotel.checkout || ''}"/>
-      </div>
-      ${hotel.name ? `<div class="hotel-resolved">✓ ${hotel.name}</div>` : ''}`
 
-    row.querySelector('.h-name').onchange = async e => {
-      const val = e.target.value.trim()
-      const list = DB.trips
-      const t = list.find(x => x.id === trip.id)
-      t.hotels[idx].input = val
-      t.hotels[idx].name = null
-      t.hotels[idx].lat = null
-      t.hotels[idx].lng = null
-      DB.save(list)
-      await resolveHotel(trip.id, idx)
-      renderP2(); renderP3IfActive()
+    const isResolved = !!(hotel.name && !hotel._editing)
+
+    if (isResolved) {
+      // 접힌 상태 — 요약 카드
+      row.innerHTML = `
+        <div class="hotel-summary">
+          <span class="hotel-summary-icon">🏨</span>
+          <div class="hotel-summary-text">
+            <div class="hotel-summary-name">${hotel.name}</div>
+            <div class="hotel-summary-dates">${hotel.checkin || '?'} → ${hotel.checkout || '?'}</div>
+          </div>
+          <button type="button" class="hotel-edit">수정</button>
+          <button type="button" class="hotel-del">제거</button>
+        </div>`
+      row.querySelector('.hotel-edit').onclick = () => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        t.hotels[idx]._editing = true
+        DB.save(list)
+        renderP2()
+      }
+    } else {
+      // 펼친 상태 — 입력 폼
+      row.innerHTML = `
+        <div class="hotel-row-top">
+          <input type="text" class="h-name" placeholder="구글맵 링크 또는 호텔 이름" value="${hotel.input || ''}"/>
+          <button type="button" class="hotel-del">제거</button>
+        </div>
+        <div class="hotel-dates">
+          <input type="date" class="h-checkin" value="${hotel.checkin || ''}"/>
+          <input type="date" class="h-checkout" value="${hotel.checkout || ''}"/>
+        </div>
+        ${hotel.name ? `<div class="hotel-resolved">✓ ${hotel.name}</div>` : ''}
+        <button type="button" class="hotel-done">완료</button>`
+
+      row.querySelector('.h-name').onchange = async e => {
+        const val = e.target.value.trim()
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        t.hotels[idx].input = val
+        t.hotels[idx].name = null
+        t.hotels[idx].lat = null
+        t.hotels[idx].lng = null
+        DB.save(list)
+        await resolveHotel(trip.id, idx)
+        renderP2(); renderP3IfActive()
+      }
+      row.querySelector('.h-checkin').onchange = e => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        t.hotels[idx].checkin = e.target.value
+        DB.save(list)
+        renderP2(); renderP3IfActive()
+      }
+      row.querySelector('.h-checkout').onchange = e => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        t.hotels[idx].checkout = e.target.value
+        DB.save(list)
+        renderP2(); renderP3IfActive()
+      }
+      row.querySelector('.hotel-done').onclick = () => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        delete t.hotels[idx]._editing
+        DB.save(list)
+        renderP2()
+      }
     }
-    row.querySelector('.h-checkin').onchange = e => {
-      const list = DB.trips
-      const t = list.find(x => x.id === trip.id)
-      t.hotels[idx].checkin = e.target.value
-      DB.save(list)
-      renderP2(); renderP3IfActive()
-    }
-    row.querySelector('.h-checkout').onchange = e => {
-      const list = DB.trips
-      const t = list.find(x => x.id === trip.id)
-      t.hotels[idx].checkout = e.target.value
-      DB.save(list)
-      renderP2(); renderP3IfActive()
-    }
+
     row.querySelector('.hotel-del').onclick = () => {
       const list = DB.trips
       const t = list.find(x => x.id === trip.id)
@@ -697,7 +787,7 @@ document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
   const list = DB.trips
   const t = list.find(x => x.id === trip.id)
   t.hotels = t.hotels || []
-  t.hotels.push({ input: '', checkin: '', checkout: '', name: null, lat: null, lng: null })
+  t.hotels.push({ input: '', checkin: '', checkout: '', name: null, lat: null, lng: null, _editing: true })
   DB.save(list)
   renderP2()
 })
@@ -753,6 +843,37 @@ function renderHotelMarker(hotel, label) {
   return div
 }
 
+// 두 좌표 지점간 이동 배지 생성 (장소-장소, 숙소-장소 공통)
+// dirInfo: {dirMode, dirDuration, dirDistance} 저장된 값 / onResolved(dir): 계산 완료 콜백
+function createDirBar(from, to, dirInfo, onResolved, label) {
+  const bar = document.createElement('div')
+  bar.className = 'dirbar'
+  const modeIcon = dirInfo.dirMode === 'transit' ? '🚇' : dirInfo.dirMode === 'driving' ? '🚕' : '🚶'
+  const hasCoords = (from.lat != null && from.lng != null && to.lat != null && to.lng != null)
+  const labelTxt = label ? `${label} ` : ''
+
+  if (!dirInfo.dirDuration && hasCoords && typeof google !== 'undefined' && google.maps) {
+    bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
+    calcDir(from, to).then(dir => {
+      if (dir && onResolved) onResolved(dir)
+    })
+  } else {
+    const dur = dirInfo.dirDuration || '—'
+    const dist = dirInfo.dirDistance ? ` · ${dirInfo.dirDistance}` : ''
+    bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
+    if (hasCoords) {
+      const mode = dirInfo.dirMode || 'walking'
+      const url = `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=${mode}`
+      bar.onclick = () => window.open(url, '_blank')
+    } else {
+      bar.style.opacity = '.4'
+      bar.style.cursor = 'default'
+      bar.title = '좌표 정보가 없어 경로를 열 수 없어요'
+    }
+  }
+  return bar
+}
+
 function renderPlaces() {
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
@@ -761,41 +882,29 @@ function renderPlaces() {
 
   const list = document.getElementById('p3-places')
   list.innerHTML = ''
+  const places = day.places || []
 
-  // 일정 시작 — 그날 아침 출발 전 묵었던 숙소
+  // 일정 시작 — 전날 묵었던 숙소 → 첫 장소
   const hotelStart = getHotelForDate(trip, day.date, 'start')
-  if (hotelStart) list.appendChild(renderHotelMarker(hotelStart, '체크아웃 / 출발 ·'))
+  if (hotelStart && hotelStart.lat != null && places[0] && places[0].lat != null) {
+    const first = places[0]
+    const bar = createDirBar(hotelStart, first, hotelStart, dir => {
+      const list2 = DB.trips
+      const t = list2.find(x => x.id === trip.id)
+      const h = t.hotels.find(x => x === hotelStart || (x.input === hotelStart.input))
+      if (h) { h.dirMode = dir.mode; h.dirDuration = dir.dur; h.dirDistance = dir.dist; DB.save(list2) }
+      renderPlaces()
+    }, `🏨 ${hotelStart.name || '숙소'} →`)
+    list.appendChild(bar)
+  }
 
-  ;(day.places || []).forEach((place, i) => {
+  places.forEach((place, i) => {
     if (i > 0) {
-      const prev = day.places[i - 1]
-      const bar = document.createElement('div')
-      bar.className = 'dirbar'
-      const modeIcon = place.dirMode === 'transit' ? '🚇' : place.dirMode === 'driving' ? '🚕' : '🚶'
-      const hasCoords = (prev.lat != null && prev.lng != null && place.lat != null && place.lng != null)
-
-      if (!place.dirDuration && hasCoords && typeof google !== 'undefined' && google.maps) {
-        bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ 계산 중… ]</div><div class="dirline"></div>`
-        calcDir(prev, place).then(dir => {
-          if (dir) {
-            DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
-            renderPlaces()
-          }
-        })
-      } else {
-        const dur = place.dirDuration || '—'
-        const dist = place.dirDistance ? ` · ${place.dirDistance}` : ''
-        bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
-        if (hasCoords) {
-          const mode = place.dirMode || 'walking'
-          const url = `https://www.google.com/maps/dir/?api=1&origin=${prev.lat},${prev.lng}&destination=${place.lat},${place.lng}&travelmode=${mode}`
-          bar.onclick = () => window.open(url, '_blank')
-        } else {
-          bar.style.opacity = '.4'
-          bar.style.cursor = 'default'
-          bar.title = '좌표 정보가 없어 경로를 열 수 없어요'
-        }
-      }
+      const prev = places[i - 1]
+      const bar = createDirBar(prev, place, place, dir => {
+        DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
+        renderPlaces()
+      })
       list.appendChild(bar)
     }
 
@@ -856,9 +965,19 @@ function renderPlaces() {
     list.appendChild(item)
   })
 
-  // 일정 끝 — 그날 밤 묵을 숙소
+  // 일정 끝 — 마지막 장소 → 그날 밤 묵을 숙소
   const hotelEnd = getHotelForDate(trip, day.date, 'end')
-  if (hotelEnd) list.appendChild(renderHotelMarker(hotelEnd, '체크인 / 숙박 ·'))
+  if (hotelEnd && hotelEnd.lat != null && places.length > 0 && places[places.length - 1].lat != null) {
+    const last = places[places.length - 1]
+    const bar = createDirBar(last, hotelEnd, hotelEnd, dir => {
+      const list2 = DB.trips
+      const t = list2.find(x => x.id === trip.id)
+      const h = t.hotels.find(x => x === hotelEnd || (x.input === hotelEnd.input))
+      if (h) { h.dirMode = dir.mode; h.dirDuration = dir.dur; h.dirDistance = dir.dist; DB.save(list2) }
+      renderPlaces()
+    }, `→ 🏨 ${hotelEnd.name || '숙소'}`)
+    list.appendChild(bar)
+  }
 }
 
 /* =========================================================
