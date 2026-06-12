@@ -97,7 +97,7 @@ button{cursor:pointer}
 .p3-hd{padding:24px 20px 16px;border-bottom:1px solid #000}
 .p3-ey{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888;margin-bottom:8px}
 .p3-ti{font-size:40px;font-weight:900;letter-spacing:-.03em;text-transform:uppercase;line-height:.92;white-space:pre-line}
-.p3-weekday{font-size:40px;font-weight:900;letter-spacing:-.03em;vertical-align:middle}
+.p3-weekday{font-size:40px;font-weight:900;letter-spacing:-.03em;text-transform:uppercase;line-height:.92;display:inline}
 .wbar{padding:11px 20px;border-bottom:1px solid #000;display:flex;align-items:center;gap:10px}
 .wicon{font-size:16px;flex-shrink:0}
 .wvline{width:.5px;height:44px;background:#000;flex-shrink:0}
@@ -136,6 +136,8 @@ button{cursor:pointer}
 .delbtn{font-size:8px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888}
 .delbtn:hover{border-color:#000;color:#000}
 .movebtn{font-size:8px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888;line-height:1.4}
+.pmorebtn{font-size:10px;border:.5px solid #ccc;background:#fff;padding:1px 7px;color:#888;line-height:1.4;font-weight:700}
+.pmorebtn:hover{border-color:#000;color:#000}
 .movebtn:hover:not(:disabled){border-color:#000;color:#000}
 .movebtn:disabled{opacity:.25;cursor:default}
 .dirbar{padding:8px 16px;background:#f7f7f7;display:flex;align-items:center;gap:8px;cursor:pointer;border-bottom:.5px solid #ddd}
@@ -220,6 +222,9 @@ button{cursor:pointer}
 .flight-plane{font-size:20px;flex-shrink:0;filter:grayscale(.4)}
 .flight-dot{width:7px;height:7px;border-radius:50%;border:1.5px solid #6a8a9a;flex-shrink:0;background:#eaf4fb}
 .flight-dot.filled{background:#2a4a5a;border-color:#2a4a5a}
+.transport-board{flex-wrap:wrap;gap:8px 12px}
+.transport-board-ctrl{display:flex;gap:5px;width:100%;justify-content:flex-end;order:99}
+.transport-board-ctrl .movebtn,.transport-board-ctrl .delbtn{background:#fff}
 .hotel-marker{padding:10px 16px;background:#fafafa;border-bottom:.5px solid #ddd;display:flex;align-items:center;gap:8px}
 .hotel-marker-icon{font-size:16px;flex-shrink:0}
 .hotel-marker-text{font-size:11px;color:#555;letter-spacing:.02em}
@@ -260,11 +265,11 @@ button{cursor:pointer}
     </div>
   </div>
   <div class="hotel-section">
-    <div class="hotel-section-title" id="flight-section-toggle" style="cursor:pointer">[ ✈️ 항공편 ▾ ]</div>
+    <div class="hotel-section-title" id="flight-section-toggle" style="cursor:pointer">[ 🚐 교통편 ▾ ]</div>
     <div id="flight-section-body" style="display:none">
       <div class="hotel-section-hint">출발/도착 공항과 날짜·시간을 입력하면 해당 날짜 일정에 표시됩니다.</div>
       <div class="hotel-list" id="p2-flight-list"></div>
-      <button type="button" class="hotel-add" id="p2-flight-add">+ 항공편 추가</button>
+      <button type="button" class="hotel-add" id="p2-flight-add">+ 교통편 추가</button>
     </div>
   </div>
   <div class="rlist" id="p2-list"></div>
@@ -560,7 +565,21 @@ function renderP1() {
   const grid = document.getElementById('p1-grid')
   grid.innerHTML = ''
 
-  DB.trips.forEach(trip => {
+  const trips = DB.trips
+  const today = new Date().toISOString().slice(0, 10)
+
+  // 메인: dateEnd >= 오늘인 것들 중 dateStart가 가장 가까운(또는 진행중인) 여행
+  // 나머지: dateStart 내림차순 (오래된 날짜가 하단)
+  const upcoming = trips.filter(t => t.dateEnd && t.dateEnd >= today)
+  upcoming.sort((a, b) => (a.dateStart || '').localeCompare(b.dateStart || ''))
+  const mainTrip = upcoming[0] || null
+
+  const rest = trips.filter(t => t !== mainTrip)
+  rest.sort((a, b) => (b.dateStart || '').localeCompare(a.dateStart || ''))
+
+  const sortedTrips = mainTrip ? [mainTrip, ...rest] : rest
+
+  sortedTrips.forEach(trip => {
     let w1, w2, w3
     if (trip.name.includes('/')) {
       const parts = trip.name.split('/')
@@ -1034,6 +1053,7 @@ function renderP2Flights(trip) {
           <div class="transport-mode-pick" style="flex:1">
             <button type="button" class="tmode-btn ${mode === 'flight' ? 'active' : ''}" data-mode="flight">✈️ 비행기</button>
             <button type="button" class="tmode-btn ${mode === 'train' ? 'active' : ''}" data-mode="train">🚄 기차</button>
+            <button type="button" class="tmode-btn ${mode === 'bus' ? 'active' : ''}" data-mode="bus">🚌 버스</button>
             <button type="button" class="tmode-btn ${mode === 'car' ? 'active' : ''}" data-mode="car">🚗 자동차</button>
           </div>
           <button type="button" class="hotel-del">제거</button>
@@ -1161,8 +1181,8 @@ function syncFlightToPlaces(tripId, flightId) {
     }
   }
 
-  // 표시 조건: 이름과 출발일이 있어야 함
-  if (!flight.depName || !flight.arrName || !flight.depDate) {
+  // 표시 조건: 이름, 출발일, 그리고 양쪽 좌표(순서변경 가능한 위치 정보)가 있어야 함
+  if (!flight.depName || !flight.arrName || !flight.depDate || flight.depLat == null || flight.arrLat == null) {
     flight.placeRef = null
     DB.save(list)
     return
@@ -1186,6 +1206,10 @@ function syncFlightToPlaces(tripId, flightId) {
     transportMode: mode,
     fromName: fromDisplay,
     toName: toDisplay,
+    fromDate: flight.depDate,
+    fromTime: flight.depTime || '',
+    toDate: flight.arrDate || flight.depDate,
+    toTime: flight.arrTime || '',
     time: flight.depTime || '',
     memo: '',
     name: `${fromDisplay} → ${toDisplay}`,
@@ -1276,7 +1300,7 @@ document.getElementById('flight-section-toggle')?.addEventListener('click', () =
   const open = body.style.display !== 'none'
   body.style.display = open ? 'none' : 'flex'
   if (!open) body.style.flexDirection = 'column'
-  toggle.textContent = open ? '[ ✈️ 항공편 ▾ ]' : '[ ✈️ 항공편 ▴ ]'
+  toggle.textContent = open ? '[ 🚐 교통편 ▾ ]' : '[ 🚐 교통편 ▴ ]'
 })
 
 document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
@@ -1480,6 +1504,8 @@ function getWeekday(dateStr) {
   return WEEKDAY[d.getDay()]
 }
 
+const TRANSPORT_ICON = { flight: '✈️', train: '🚄', bus: '🚌', car: '🚗' }
+
 function renderFlightCard(flight) {
   const depDisplay = flight.depCity ? flight.depCity.split(',')[0].trim() : shortPlaceName(flight.depName)
   const arrDisplay = flight.arrCity ? flight.arrCity.split(',')[0].trim() : shortPlaceName(flight.arrName)
@@ -1494,7 +1520,7 @@ function renderFlightCard(flight) {
     <div class="flight-mid">
       <span class="flight-dot"></span>
       <span class="flight-line"></span>
-      <span class="flight-plane">✈️</span>
+      <span class="flight-plane">${TRANSPORT_ICON[flight.mode] || '✈️'}</span>
       <span class="flight-line"></span>
       <span class="flight-dot filled"></span>
     </div>
@@ -1553,18 +1579,31 @@ function renderPlaces() {
 
     // 교통편 항목 — 특수 카드
     if (place.category === 'transport') {
-      const modeIcon = place.transportMode === 'flight' ? '✈️' : place.transportMode === 'train' ? '🚄' : '🚗'
       const card = document.createElement('div')
-      card.className = 'transport-card'
+      card.className = 'flight-card transport-board'
       card.innerHTML = `
-        <span class="transport-icon">${modeIcon}</span>
-        <div class="transport-info">
-          <div class="transport-route">${place.fromName} → ${place.toName}</div>
-          <div class="transport-meta">${place.time ? place.time : ''}${place.memo ? (place.time ? ' · ' : '') + place.memo : ''}</div>
+        <div class="flight-side">
+          <div class="flight-city">${place.fromName}</div>
+          <div class="flight-label">FROM</div>
+          <div class="flight-time">${place.fromDate || ''}${place.fromTime ? ' · ' + place.fromTime : ''}</div>
         </div>
-        <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
-        <button class="movebtn" data-move="1" ${i === (places.length - 1) ? 'disabled' : ''}>↓</button>
-        <button class="delbtn">삭제</button>`
+        <div class="flight-mid">
+          <span class="flight-dot"></span>
+          <span class="flight-line"></span>
+          <span class="flight-plane">${TRANSPORT_ICON[place.transportMode] || '🚗'}</span>
+          <span class="flight-line"></span>
+          <span class="flight-dot filled"></span>
+        </div>
+        <div class="flight-side right">
+          <div class="flight-city">${place.toName}</div>
+          <div class="flight-label">TO</div>
+          <div class="flight-time">${place.toDate || ''}${place.toTime ? ' · ' + place.toTime : ''}</div>
+        </div>
+        <div class="transport-board-ctrl">
+          <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="movebtn" data-move="1" ${i === (places.length - 1) ? 'disabled' : ''}>↓</button>
+          <button class="delbtn">삭제</button>
+        </div>`
       card.querySelectorAll('.movebtn').forEach(btn => {
         btn.onclick = () => {
           const dir = parseInt(btn.dataset.move, 10)
@@ -1600,16 +1639,15 @@ function renderPlaces() {
           ${place.isOpen === true ? '<span class="open-b">OPEN</span>' : place.isOpen === false ? '<span class="closed-b">CLOSED</span>' : ''}
           <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
           <button class="movebtn" data-move="1" ${i === (day.places.length - 1) ? 'disabled' : ''}>↓</button>
-          <button class="delbtn" data-pid="${place.id}">삭제</button>
+          <button class="pmorebtn" data-pid="${place.id}">+</button>
         </div>
       </div>
       <div class="phrs">${place.hours || '영업시간 정보 없음'}${place.address ? ` · ${place.address}` : ''}</div>
       <div class="pcost" data-pid="${place.id}"></div>
       <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
 
-    item.querySelector('.delbtn').onclick = () => {
-      DB.deletePlace(state.tripId, state.dayId, place.id)
-      renderPlaces()
+    item.querySelector('.pmorebtn').onclick = () => {
+      openPlaceMoreModal(place, day)
     }
     item.querySelectorAll('.movebtn').forEach(btn => {
       btn.onclick = () => {
@@ -1876,6 +1914,59 @@ async function savePlace(nameOrId, coords) {
   renderPlaces()
 }
 
+
+// 장소 + 버튼 — 날짜 변경 / 삭제 모달
+function openPlaceMoreModal(place, day) {
+  const trip = DB.getTrip(state.tripId)
+  const modal = document.getElementById('modal')
+  const dayOptions = (trip.days || []).map(d => {
+    const wd = getWeekday(d.date)
+    return `<option value="${d.id}" ${d.id === day.id ? 'selected' : ''}>${d.date || '(날짜없음)'}${wd ? ' ' + wd : ''}</option>`
+  }).join('')
+
+  modal.innerHTML = `<div class="mbox">
+    <div class="mhd">
+      <span class="mtitle">[ ${place.name} ]</span>
+      <button class="mclose" onclick="closeModal()">×</button>
+    </div>
+    <div class="mbody">
+      <div class="mfield">
+        <span class="mlbl">날짜 변경</span>
+        <select class="min" id="pm-day-select">${dayOptions}</select>
+      </div>
+    </div>
+    <div class="mfoot" style="display:flex;gap:8px">
+      <button class="mbtn" id="pm-move-ok" style="flex:1">날짜 변경</button>
+      <button class="mbtn" id="pm-delete" style="flex:1;border-color:#c00;color:#c00">삭제</button>
+    </div>
+  </div>`
+  modal.style.display = 'flex'
+
+  document.getElementById('pm-move-ok').onclick = () => {
+    const newDayId = document.getElementById('pm-day-select').value
+    if (newDayId === day.id) { closeModal(); return }
+    const list = DB.trips
+    const t = list.find(x => x.id === trip.id)
+    const oldDay = (t.days || []).find(d => d.id === day.id)
+    const newDay = (t.days || []).find(d => d.id === newDayId)
+    if (!oldDay || !newDay) { closeModal(); return }
+    oldDay.places = (oldDay.places || []).filter(p => p.id !== place.id)
+    newDay.places = newDay.places || []
+    // 이동 정보 초기화 (새 위치에서 재계산)
+    delete place.dirMode; delete place.dirDuration; delete place.dirDistance
+    newDay.places.push(place)
+    DB.save(list)
+    closeModal()
+    renderPlaces()
+  }
+
+  document.getElementById('pm-delete').onclick = () => {
+    if (!confirm('이 장소를 삭제할까요?')) return
+    DB.deletePlace(state.tripId, day.id, place.id)
+    closeModal()
+    renderPlaces()
+  }
+}
 
 function openNameModal() {
   const modal = document.getElementById('modal')
