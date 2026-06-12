@@ -666,6 +666,7 @@ async function doAddPlace() {
   const inp = document.getElementById('place-in')
   const btn = document.getElementById('place-btn')
   let raw = inp.value.trim()
+  console.log('[doAddPlace] 시작, raw:', raw)
   if (!raw) return
 
   btn.textContent = '불러오는 중…'
@@ -717,6 +718,7 @@ async function doAddPlace() {
       }
     }
 
+    console.log('[doAddPlace] target:', target, 'coords:', coords)
     if (target) {
       await savePlace(target, coords)
     } else if (coords) {
@@ -724,10 +726,15 @@ async function doAddPlace() {
     } else {
       await savePlace(raw, coords)
     }
-    inp.value = ''
+    console.log('[doAddPlace] savePlace 완료')
+    const curInp = document.getElementById('place-in')
+    if (curInp) curInp.value = ''
+  } catch (e) {
+    console.error('[doAddPlace] 에러:', e)
   } finally {
-    btn.textContent = '추가 →'
-    btn.disabled = false
+    console.log('[doAddPlace] finally')
+    const curBtn = document.getElementById('place-btn')
+    if (curBtn) { curBtn.textContent = '추가 →'; curBtn.disabled = false }
   }
 }
 
@@ -771,12 +778,15 @@ async function savePlaceByCoords(coords) {
 }
 
 async function savePlace(nameOrId, coords) {
+  console.log('[savePlace] 진입, nameOrId:', nameOrId, 'coords:', coords)
   let place = { name: nameOrId, category: 'attraction', hours: '', isOpen: null, memo: '' }
   if (coords) { place.lat = coords.lat; place.lng = coords.lng }
 
   try {
     if (typeof google !== 'undefined' && google.maps && google.maps.places) {
+      console.log('[savePlace] queryPlaces 호출')
       const detail = await queryPlaces(nameOrId)
+      console.log('[savePlace] queryPlaces 결과:', detail)
       if (detail) {
         place = Object.assign(place, detail)
         if (coords) { place.lat = coords.lat; place.lng = coords.lng }
