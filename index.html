@@ -192,7 +192,18 @@ button{cursor:pointer}
 .hotel-add{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:8px;color:#000;align-self:flex-start}
 .hotel-add:hover{background:#000;color:#fff}
 
-/* 3페이지 — 숙소 표시 항목 */
+/* 3페이지 — 항공편 보드카드 */
+.flight-card{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;background:#faf6f0;border-bottom:1px solid #000;gap:12px}
+.flight-side{display:flex;flex-direction:column;gap:2px;min-width:0}
+.flight-side.right{align-items:flex-end;text-align:right}
+.flight-city{font-size:20px;font-weight:800;letter-spacing:.02em;color:#3a2f28}
+.flight-label{font-size:9px;letter-spacing:.15em;color:#7a6a5a;font-weight:700}
+.flight-time{font-size:9px;color:#8a7a6a}
+.flight-mid{flex:1;display:flex;align-items:center;justify-content:center;gap:4px;min-width:60px}
+.flight-line{flex:1;height:1px;background:#c9b8a8;border-top:1px dashed #c9b8a8}
+.flight-plane{font-size:20px;flex-shrink:0;filter:grayscale(1) brightness(.4)}
+.flight-dot{width:7px;height:7px;border-radius:50%;border:1.5px solid #8a7a6a;flex-shrink:0;background:#faf6f0}
+.flight-dot.filled{background:#3a2f28;border-color:#3a2f28}
 .hotel-marker{padding:10px 16px;background:#fafafa;border-bottom:.5px solid #ddd;display:flex;align-items:center;gap:8px}
 .hotel-marker-icon{font-size:16px;flex-shrink:0}
 .hotel-marker-text{font-size:11px;color:#555;letter-spacing:.02em}
@@ -1155,13 +1166,14 @@ async function resolveHotel(tripId, hotelId) {
 }
 
 function getHotelForDate(trip, date, position) {
-  // position: 'start' = 그날 아침 체크아웃하는 숙소 (전날 밤 묵었던 곳, checkout == date)
-  //           'end'   = 그날 밤 체크인되어 있는 숙소 (checkin <= date < checkout)
+  // position: 'start' = 그날 일정 맨 위에 표시 (전날 밤 묵었던 곳에서 출발) — 체크아웃 당일까지
+  //           'end'   = 그날 일정 맨 아래에 표시 (그날 밤 묵을 곳) — 체크인 당일부터
+  // 체크인 당일: end만 / 체크아웃 당일: start만 / 그 사이: 둘 다
   if (!trip.hotels || !date) return null
   for (const hotel of trip.hotels) {
     if (!hotel.checkin || !hotel.checkout) continue
     if (position === 'start') {
-      if (hotel.checkin <= date && date <= hotel.checkout) return hotel
+      if (hotel.checkin < date && date <= hotel.checkout) return hotel
     } else {
       if (hotel.checkin <= date && date < hotel.checkout) return hotel
     }
@@ -1254,7 +1266,7 @@ function createDirBar(from, to, dirInfo, onResolved, label) {
   const hasCoords = (from.lat != null && from.lng != null && to.lat != null && to.lng != null)
   const labelTxt = label ? `${label} ` : ''
 
-  if (!dirInfo.dirDuration && hasCoords && typeof google !== 'undefined' && google.maps) {
+  if ((!dirInfo.dirDuration || dirInfo.dirDuration === '정보 없음') && hasCoords && typeof google !== 'undefined' && google.maps) {
     bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
     calcDir(from, to).then(dir => {
       if (onResolved) onResolved(dir || { mode: 'walking', dur: '정보 없음', dist: '' })
@@ -1276,6 +1288,17 @@ function createDirBar(from, to, dirInfo, onResolved, label) {
   return bar
 }
 
+// 공항명에서 도시/지역명만 추출 (예: "인천국제공항" -> "인천", "Narita International Airport" -> "Narita")
+function shortPlaceName(name) {
+  if (!name) return ''
+  return name
+    .replace(/국제\s*공항$/, '')
+    .replace(/\s*공항$/, '')
+    .replace(/\s*International Airport$/i, '')
+    .replace(/\s*Airport$/i, '')
+    .trim()
+}
+
 function renderPlaces() {
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
@@ -1286,20 +1309,33 @@ function renderPlaces() {
   list.innerHTML = ''
   const places = day.places || []
 
-  // 해당 날짜의 항공편 표시 (출발/도착 각각)
+  // 해당 날짜의 항공편 표시 (보드카드 스타일)
   ;(trip.flights || []).forEach(flight => {
-    if (flight.depDate === day.date && flight.depName) {
-      const m = document.createElement('div')
-      m.className = 'hotel-marker'
-      m.innerHTML = `<span class="hotel-marker-icon">🛫</span><span class="hotel-marker-text">출발 ${flight.depTime || ''} · <span class="hotel-marker-name">${flight.depName}</span></span>`
-      list.appendChild(m)
-    }
-    if (flight.arrDate === day.date && flight.arrName) {
-      const m = document.createElement('div')
-      m.className = 'hotel-marker'
-      m.innerHTML = `<span class="hotel-marker-icon">🛬</span><span class="hotel-marker-text">도착 ${flight.arrTime || ''} · <span class="hotel-marker-name">${flight.arrName}</span></span>`
-      list.appendChild(m)
-    }
+    const showDep = flight.depDate === day.date && flight.depName
+    const showArr = flight.arrDate === day.date && flight.arrName
+    if (!showDep && !showArr) return
+
+    const card = document.createElement('div')
+    card.className = 'flight-card'
+    card.innerHTML = `
+      <div class="flight-side">
+        <div class="flight-city">${shortPlaceName(flight.depName)}</div>
+        <div class="flight-label">FROM</div>
+        <div class="flight-time">${flight.depDate || ''}${flight.depTime ? ' · ' + flight.depTime : ''}</div>
+      </div>
+      <div class="flight-mid">
+        <span class="flight-dot"></span>
+        <span class="flight-line"></span>
+        <span class="flight-plane">✈️</span>
+        <span class="flight-line"></span>
+        <span class="flight-dot filled"></span>
+      </div>
+      <div class="flight-side right">
+        <div class="flight-city">${shortPlaceName(flight.arrName)}</div>
+        <div class="flight-label">TO</div>
+        <div class="flight-time">${flight.arrDate || ''}${flight.arrTime ? ' · ' + flight.arrTime : ''}</div>
+      </div>`
+    list.appendChild(card)
   })
 
   // 일정 시작 — 전날 묵었던 숙소 → 첫 장소
@@ -1747,21 +1783,31 @@ function calcDir(origin, dest) {
     const finish = v => { if (!done) { done = true; resolve(v) } }
     setTimeout(() => finish(null), 3000)
     const svc = new google.maps.DirectionsService()
+
+    function tryTransit(walkingFallback) {
+      svc.route(
+        { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'TRANSIT' },
+        (r2, s2) => {
+          if (s2 === 'OK') finish({ mode: 'transit', dur: r2.routes[0].legs[0].duration.text, dist: r2.routes[0].legs[0].distance.text })
+          else if (walkingFallback) finish(walkingFallback)
+          else finish(null)
+        }
+      )
+    }
+
     svc.route(
       { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'WALKING' },
       (r, s) => {
-        if (s !== 'OK') { finish(null); return }
+        if (s !== 'OK') {
+          tryTransit(null)
+          return
+        }
         const leg = r.routes[0].legs[0]
+        const walkingResult = { mode: 'walking', dur: leg.duration.text, dist: leg.distance.text }
         if (leg.distance.value > 2000) {
-          svc.route(
-            { origin: { lat: origin.lat, lng: origin.lng }, destination: { lat: dest.lat, lng: dest.lng }, travelMode: 'TRANSIT' },
-            (r2, s2) => {
-              if (s2 === 'OK') finish({ mode: 'transit', dur: r2.routes[0].legs[0].duration.text, dist: r2.routes[0].legs[0].distance.text })
-              else finish({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
-            }
-          )
+          tryTransit(walkingResult)
         } else {
-          finish({ mode: 'walking', dur: leg.duration.text, dist: leg.distance.text })
+          finish(walkingResult)
         }
       }
     )
