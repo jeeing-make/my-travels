@@ -126,18 +126,19 @@ button{cursor:pointer}
 .mfoot{padding:14px 18px;border-top:.5px solid #ddd}
 .mbtn{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:9px 16px;color:#000}
 .mbtn:hover{background:#000;color:#fff}
-.photo-row{display:flex;align-items:center;gap:8px;margin-top:4px}
-.photo-btn{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:5px 10px;color:#000;flex-shrink:0}
+
+/* 사진 업로드 — label로 input 감싸서 클릭 확실하게 */
+.photo-row{display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap}
+.photo-btn{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:6px 12px;color:#000;flex-shrink:0;display:inline-block;cursor:pointer}
 .photo-btn:hover{background:#000;color:#fff}
-.photo-name{font-size:9px;color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.photo-btn input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+.photo-name{font-size:9px;color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:60px}
+.photo-del{font-size:9px;letter-spacing:.08em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 12px;color:#888;display:none}
+.photo-del:hover{border-color:#c00;color:#c00}
 .photo-prev{width:80px;height:56px;object-fit:cover;border:1px solid #000;margin-top:6px;display:none}
 </style>
 </head>
 <body>
-
-<!-- 숨겨진 파일 input — body 최상단에 고정 -->
-<input type="file" id="fi1" accept="image/*" style="position:fixed;top:-999px;left:-999px;opacity:0"/>
-<input type="file" id="fi2" accept="image/*" style="position:fixed;top:-999px;left:-999px;opacity:0"/>
 
 <nav class="nav">
   <span class="nav-logo" id="nav-logo">MY TRAVELS</span>
@@ -388,7 +389,6 @@ function renderP1() {
   grid.innerHTML = ''
 
   DB.trips.forEach(trip => {
-    // 슬래시 기준으로 3줄 분리
     let w1, w2, w3
     if (trip.name.includes('/')) {
       const parts = trip.name.split('/')
@@ -525,12 +525,10 @@ function renderP3() {
   document.getElementById('p3-ey').textContent = `[ Day ${dayIdx + 1} ] — ${cleanName(trip.name)}`
   document.getElementById('p3-ti').textContent = dateObj ? `${MON[dateObj.getMonth()]}\n${dateObj.getDate()}.` : ''
 
-  // 옷차림
   const oi = document.getElementById('outfit-in')
   oi.value = day.outfit || ''
   oi.onchange = () => DB.updateDay(state.tripId, state.dayId, { outfit: oi.value })
 
-  // 날씨
   if (day.weather) {
     applyWeather(day.weather)
   } else if (trip.lat && trip.lon && day.date) {
@@ -545,10 +543,8 @@ function renderP3() {
     document.getElementById('w-desc').textContent = '장소 추가 시 해당 도시 날씨가 자동 표시됩니다'
   }
 
-  // 장소 목록
   renderPlaces()
 
-  // 장소 추가 버튼
   const btn = document.getElementById('place-btn')
   const inp = document.getElementById('place-in')
   btn.onclick = () => doAddPlace()
@@ -565,7 +561,6 @@ function renderPlaces() {
   list.innerHTML = ''
 
   ;(day.places || []).forEach((place, i) => {
-    // 이동 배지
     if (i > 0) {
       const prev = day.places[i - 1]
       const bar = document.createElement('div')
@@ -623,7 +618,6 @@ async function doAddPlace() {
   btn.disabled = true
 
   try {
-    // 구글맵 URL → 좌표 추출 (날씨용)
     if (raw.startsWith('http')) {
       const coordMatch = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/)
       if (coordMatch) {
@@ -641,7 +635,6 @@ async function doAddPlace() {
       }
     }
 
-    // 장소 검색 타겟 결정
     let target = raw
     if (raw.startsWith('http')) {
       const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]+)/)
@@ -651,7 +644,6 @@ async function doAddPlace() {
       else if (pnM)  target = decodeURIComponent(pnM[1].replace(/\+/g, ' '))
       else if (pqM)  target = decodeURIComponent(pqM[1].replace(/\+/g, ' '))
       else {
-        // 단축 URL → 모달로 이름 받기
         btn.textContent = '추가 →'; btn.disabled = false
         inp.value = ''
         openNameModal()
@@ -670,15 +662,17 @@ async function doAddPlace() {
 async function savePlace(nameOrId) {
   let place = { name: nameOrId, category: 'attraction', hours: '', isOpen: null, memo: '' }
 
-  // Google Maps API가 로드됐으면 상세정보 조회
   if (typeof google !== 'undefined' && google.maps && google.maps.places) {
     try {
       const detail = await queryPlaces(nameOrId)
       if (detail) place = detail
-    } catch (e) { /* API 실패해도 이름으로 저장 */ }
+    } catch (e) {
+      console.warn('Places API 실패, 이름으로만 저장:', e)
+    }
+  } else {
+    console.warn('Google Maps API 로드 안됨 — 이름으로만 저장')
   }
 
-  // 이전 장소와 경로 계산
   const trip = DB.getTrip(state.tripId)
   const day = trip.days.find(d => d.id === state.dayId)
   const prev = (day.places || []).slice(-1)[0]
@@ -795,9 +789,10 @@ function calcDir(origin, dest) {
    파일 읽기
    ========================================================= */
 function readFile(file) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const fr = new FileReader()
     fr.onload = e => resolve(e.target.result)
+    fr.onerror = e => reject(e)
     fr.readAsDataURL(file)
   })
 }
@@ -808,6 +803,10 @@ function readFile(file) {
 function openTripModal(editId) {
   const trip = editId ? DB.getTrip(editId) : null
   const modal = document.getElementById('modal')
+
+  // 현재 사진 상태 (메모리에서 관리, 저장 시점에 trip에 적용)
+  let photo1 = trip ? (trip.photo1 || null) : null
+  let photo2 = trip ? (trip.photo2 || null) : null
 
   modal.innerHTML = `<div class="mbox">
     <div class="mhd">
@@ -843,50 +842,69 @@ function openTripModal(editId) {
       <div class="mfield">
         <span class="mlbl">사진 1 — 카드 중간 왼쪽 (둥근 프레임)</span>
         <div class="photo-row">
-          <button class="photo-btn" id="btn-p1">파일 선택</button>
-          <span class="photo-name" id="nm-p1">${trip && trip.photo1 ? '✓ 기존 사진 있음' : '선택 안됨'}</span>
+          <label class="photo-btn">파일 선택<input type="file" id="fi1" accept="image/*"/></label>
+          <span class="photo-name" id="nm-p1">${photo1 ? '✓ 사진 있음' : '선택 안됨'}</span>
+          <button type="button" class="photo-del" id="del-p1" style="${photo1 ? 'display:inline-block' : ''}">제거</button>
         </div>
-        <img class="photo-prev" id="prev-p1" ${trip && trip.photo1 ? `src="${trip.photo1}" style="display:block;border-radius:10px"` : ''}/>
+        <img class="photo-prev" id="prev-p1" ${photo1 ? `src="${photo1}" style="display:block;border-radius:10px"` : ''}/>
       </div>
       <div class="mfield">
         <span class="mlbl">사진 2 — 카드 하단 오른쪽</span>
         <div class="photo-row">
-          <button class="photo-btn" id="btn-p2">파일 선택</button>
-          <span class="photo-name" id="nm-p2">${trip && trip.photo2 ? '✓ 기존 사진 있음' : '선택 안됨'}</span>
+          <label class="photo-btn">파일 선택<input type="file" id="fi2" accept="image/*"/></label>
+          <span class="photo-name" id="nm-p2">${photo2 ? '✓ 사진 있음' : '선택 안됨'}</span>
+          <button type="button" class="photo-del" id="del-p2" style="${photo2 ? 'display:inline-block' : ''}">제거</button>
         </div>
-        <img class="photo-prev" id="prev-p2" ${trip && trip.photo2 ? `src="${trip.photo2}" style="display:block"` : ''}/>
+        <img class="photo-prev" id="prev-p2" ${photo2 ? `src="${photo2}" style="display:block"` : ''}/>
       </div>
     </div>
     <div class="mfoot"><button class="mbtn" id="btn-save">${trip ? '저장 →' : '추가 →'}</button></div>
   </div>`
   modal.style.display = 'flex'
 
-  // hidden input에 연결
   const fi1 = document.getElementById('fi1')
   const fi2 = document.getElementById('fi2')
-  fi1.value = ''; fi2.value = ''
 
-  document.getElementById('btn-p1').onclick = () => fi1.click()
-  document.getElementById('btn-p2').onclick = () => fi2.click()
-
-  fi1.onchange = () => {
+  fi1.addEventListener('change', () => {
     const f = fi1.files[0]; if (!f) return
-    document.getElementById('nm-p1').textContent = f.name
     readFile(f).then(src => {
+      photo1 = src
+      document.getElementById('nm-p1').textContent = f.name
       const img = document.getElementById('prev-p1')
       img.src = src; img.style.display = 'block'; img.style.borderRadius = '10px'
-    })
-  }
-  fi2.onchange = () => {
+      document.getElementById('del-p1').style.display = 'inline-block'
+    }).catch(() => alert('사진을 읽는 중 오류가 발생했어요.'))
+  })
+
+  fi2.addEventListener('change', () => {
     const f = fi2.files[0]; if (!f) return
-    document.getElementById('nm-p2').textContent = f.name
     readFile(f).then(src => {
+      photo2 = src
+      document.getElementById('nm-p2').textContent = f.name
       const img = document.getElementById('prev-p2')
       img.src = src; img.style.display = 'block'
-    })
+      document.getElementById('del-p2').style.display = 'inline-block'
+    }).catch(() => alert('사진을 읽는 중 오류가 발생했어요.'))
+  })
+
+  document.getElementById('del-p1').onclick = () => {
+    photo1 = null
+    fi1.value = ''
+    document.getElementById('nm-p1').textContent = '선택 안됨'
+    const img = document.getElementById('prev-p1')
+    img.style.display = 'none'; img.src = ''
+    document.getElementById('del-p1').style.display = 'none'
+  }
+  document.getElementById('del-p2').onclick = () => {
+    photo2 = null
+    fi2.value = ''
+    document.getElementById('nm-p2').textContent = '선택 안됨'
+    const img = document.getElementById('prev-p2')
+    img.style.display = 'none'; img.src = ''
+    document.getElementById('del-p2').style.display = 'none'
   }
 
-  document.getElementById('btn-save').onclick = async () => {
+  document.getElementById('btn-save').onclick = () => {
     const name = document.getElementById('f-name').value.trim()
     if (!name) { alert('여행 이름을 입력해주세요'); return }
 
@@ -897,12 +915,9 @@ function openTripModal(editId) {
       dateEnd:     document.getElementById('f-end').value,
       countries:   document.getElementById('f-countries').value.trim(),
       companions:  document.getElementById('f-companions').value.trim(),
-      photo1:      trip ? trip.photo1 || null : null,
-      photo2:      trip ? trip.photo2 || null : null,
+      photo1,
+      photo2,
     }
-
-    if (fi1.files[0]) data.photo1 = await readFile(fi1.files[0])
-    if (fi2.files[0]) data.photo2 = await readFile(fi2.files[0])
 
     if (editId) {
       DB.updateTrip(editId, data)
