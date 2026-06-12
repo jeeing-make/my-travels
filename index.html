@@ -310,6 +310,27 @@ const DB = {
     this.save(list)
     return data
   },
+  // dateStart~dateEnd 범위의 날짜를 days에 자동으로 채움 (이미 있는 날짜는 건너뜀)
+  ensureDaysForRange(tripId) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip || !trip.dateStart || !trip.dateEnd) return
+    trip.days = trip.days || []
+    const existing = new Set(trip.days.map(d => d.date))
+    const start = new Date(trip.dateStart)
+    const end = new Date(trip.dateEnd)
+    if (isNaN(start) || isNaN(end) || start > end) return
+    let added = false
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().slice(0, 10)
+      if (!existing.has(dateStr)) {
+        trip.days.push({ id: 'd' + Date.now() + Math.random().toString(36).slice(2,6), date: dateStr, memo: '', places: [] })
+        existing.add(dateStr)
+        added = true
+      }
+    }
+    if (added) this.save(list)
+  },
   updateDay(tripId, dayId, patch) {
     const list = this.trips
     const trip = list.find(t => t.id === tripId)
@@ -1590,11 +1611,14 @@ function openTripModal(editId) {
     }
 
     try {
+      let tripId = editId
       if (editId) {
         DB.updateTrip(editId, data)
       } else {
-        DB.addTrip(data)
+        const added = DB.addTrip(data)
+        tripId = added.id
       }
+      DB.ensureDaysForRange(tripId)
       closeModal()
       renderP1()
     } catch (e) {
