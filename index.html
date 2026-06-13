@@ -1604,32 +1604,34 @@ function renderPlaces() {
 
   const list = document.getElementById('p3-places')
   list.innerHTML = ''
-  let places = day.places || []
 
   // 이 날짜에 출발하는 모든 교통편 강제 재동기화 (시간/모드 등 최신화)
   ;(trip.flights || []).forEach(f => {
     if (f.depDate === day.date) syncFlightToPlaces(trip.id, f.id)
   })
+
+  // 전체 days를 스캔하여 좌표없음/연결끊김 교통편 정리 (placeRef 추적과 무관하게)
+  {
+    const list2 = DB.trips
+    const t2 = list2.find(x => x.id === trip.id)
+    let changed = false
+    ;(t2.days || []).forEach(d => {
+      const before = (d.places || []).length
+      d.places = (d.places || []).filter(p => {
+        if (p.category !== 'transport') return true
+        if (!p._flightId) return false // 연결정보 없는 옛 데이터는 제거
+        const f = (t2.flights || []).find(x => x.id === p._flightId)
+        return !!(f && f.depLat != null && f.arrLat != null)
+      })
+      if ((d.places || []).length !== before) changed = true
+    })
+    if (changed) DB.save(list2)
+  }
+
   // 최신 데이터 다시 로드
   const trip2 = DB.getTrip(state.tripId)
   const day2_ = (trip2.days || []).find(d => d.id === state.dayId)
-  places = day2_.places || []
-
-  // 좌표 없거나 연결이 끊긴 교통편 항목 정리 (순서변경 불가능한 것은 표시 안 함)
-  const toRemove = places.filter(p => {
-    if (p.category !== 'transport') return false
-    if (!p._flightId) return true // 연결정보 없는 옛 데이터는 제거
-    const f = (trip2.flights || []).find(x => x.id === p._flightId)
-    return !f || f.depLat == null || f.arrLat == null
-  })
-  if (toRemove.length) {
-    const list2 = DB.trips
-    const t2 = list2.find(x => x.id === trip.id)
-    const dRef = (t2.days || []).find(d => d.id === day.id)
-    dRef.places = (dRef.places || []).filter(p => !toRemove.some(r => r.id === p.id))
-    DB.save(list2)
-    places = dRef.places
-  }
+  let places = day2_.places || []
 
   // 해당 날짜의 항공편 표시 (보드카드 스타일)
   ;(trip.flights || []).forEach(flight => {
