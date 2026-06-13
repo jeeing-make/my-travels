@@ -766,12 +766,27 @@ const fxCache = {}
 async function getFxRateToKRW(currency) {
   if (currency === 'KRW') return 1
   if (fxCache[currency]) return fxCache[currency]
+
+  // 1차: frankfurter.app
   try {
     const res = await fetch(`https://api.frankfurter.app/latest?from=${currency}&to=KRW`)
-    const data = await res.json()
-    const rate = data.rates && data.rates.KRW
-    if (rate) { fxCache[currency] = rate; return rate }
-  } catch (e) { console.warn('환율 조회 실패:', e) }
+    if (res.ok) {
+      const data = await res.json()
+      const rate = data.rates && data.rates.KRW
+      if (rate) { fxCache[currency] = rate; return rate }
+    }
+  } catch (e) { console.warn(`환율 조회 실패 (frankfurter, ${currency}):`, e) }
+
+  // 2차 폴백: open.er-api.com
+  try {
+    const res2 = await fetch(`https://open.er-api.com/v6/latest/${currency}`)
+    if (res2.ok) {
+      const data2 = await res2.json()
+      const rate2 = data2.rates && data2.rates.KRW
+      if (rate2) { fxCache[currency] = rate2; return rate2 }
+    }
+  } catch (e) { console.warn(`환율 조회 실패 (er-api, ${currency}):`, e) }
+
   return null
 }
 
