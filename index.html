@@ -1510,9 +1510,10 @@ async function updateDayTotal() {
 
 // 두 좌표 지점간 이동 배지 생성 (장소-장소, 숙소-장소 공통)
 // dirInfo: {dirMode, dirDuration, dirDistance} 저장된 값 / onResolved(dir): 계산 완료 콜백
-function createDirBar(from, to, dirInfo, onResolved, label) {
+function createDirBar(from, to, dirInfo, onResolved, label, countryCode) {
   const bar = document.createElement('div')
   bar.className = 'dirbar'
+  const isKorea = countryCode === 'KR'
   const modeIcon = dirInfo.dirMode === 'transit' ? '🚇' : dirInfo.dirMode === 'driving' ? '🚕' : '🚶'
   const hasCoords = (from.lat != null && from.lng != null && to.lat != null && to.lng != null)
   const labelTxt = label ? `${label} ` : ''
@@ -1523,7 +1524,8 @@ function createDirBar(from, to, dirInfo, onResolved, label) {
 
   if (needsRecalc && hasCoords && typeof google !== 'undefined' && google.maps) {
     bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
-    calcDir(from, to).then(dir => {
+    const calc = isKorea ? calcDirKorea(from, to) : calcDir(from, to)
+    calc.then(dir => {
       if (onResolved) onResolved(dir || { mode: 'walking', dur: '정보 없음', dist: '' })
     })
   } else {
@@ -1532,7 +1534,9 @@ function createDirBar(from, to, dirInfo, onResolved, label) {
     bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
     if (hasCoords) {
       const mode = dirInfo.dirMode || 'walking'
-      const url = `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=${mode}`
+      const url = isKorea
+        ? `https://map.kakao.com/?sName=${encodeURIComponent(from.name || '출발')}&eName=${encodeURIComponent(to.name || '도착')}&sX=${from.lng}&sY=${from.lat}&eX=${to.lng}&eY=${to.lat}`
+        : `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=${mode}`
       bar.onclick = () => window.open(url, '_blank')
     } else {
       bar.style.opacity = '.4'
@@ -1663,7 +1667,7 @@ function renderPlaces() {
       const h = t.hotels.find(x => x === hotelStart || (x.input === hotelStart.input))
       if (h) { h.dirMode = dir.mode; h.dirDuration = dir.dur; h.dirDistance = dir.dist; DB.save(list2) }
       renderPlaces()
-    }, `🏨 ${hotelStart.name || '숙소'} →`)
+    }, `🏨 ${hotelStart.name || '숙소'} →`, day.countryCode)
     list.appendChild(bar)
   }
 
@@ -1675,7 +1679,7 @@ function renderPlaces() {
         const bar = createDirBar(prev, place, place, dir => {
           DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
           renderPlaces()
-        })
+        }, null, day.countryCode)
         list.appendChild(bar)
       }
     }
@@ -1800,7 +1804,7 @@ function renderPlaces() {
       const h = t.hotels.find(x => x === hotelEnd || (x.input === hotelEnd.input))
       if (h) { h.dirMode = dir.mode; h.dirDuration = dir.dur; h.dirDistance = dir.dist; DB.save(list2) }
       renderPlaces()
-    }, `→ 🏨 ${hotelEnd.name || '숙소'}`)
+    }, `→ 🏨 ${hotelEnd.name || '숙소'}`, day.countryCode)
     list.appendChild(bar)
   }
 
@@ -2267,6 +2271,49 @@ function parsePlaceResult(r) {
     memo: ''
   }
   return result
+}
+
+const ODSAY_API_KEY = 'gEsk91pA/vakCe/c/8OTjg'
+
+// 두 좌표간 직선거리(m) — Haversine
+function haversineDist(lat1, lng1, lat2, lng2) {
+  const R = 6371000
+  const toRad = d => d * Math.PI / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLng = toRad(lng2 - lng1)
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+}
+
+// 한국: ODsay 대중교통 API로 소요시간 조회. 2km 이하면 도보(직선거리 기반 추정), 초과면 대중교통.
+async function calcDirKorea(origin, dest) {
+  const distM = haversineDist(origin.lat, origin.lng, dest.lat, dest.lng)
+
+  if (distM <= 2000) {
+    const mins = Math.max(1, Math.round(distM / 67))
+    return { mode: 'walking', dur: `약 ${mins}분`, dist: distM >= 1000 ? `${(distM/1000).toFixed(1)} km` : `${Math.round(distM)} m` }
+  }
+
+  try {
+    const url = `https://api.odsay.com/v1/api/searchPubTransPathT?SX=${origin.lng}&SY=${origin.lat}&EX=${dest.lng}&EY=${dest.lat}&apiKey=${ODSAY_API_KEY}`
+    const res = await fetch(url)
+    const data = await res.json()
+    const path = data.result && data.result.path && data.result.path[0]
+    if (path && path.info) {
+      const totalTime = path.info.totalTime
+      const totalDist = path.info.totalDistance
+      return {
+        mode: 'transit',
+        dur: `약 ${totalTime}분`,
+        dist: totalDist >= 1000 ? `${(totalDist/1000).toFixed(1)} km` : `${totalDist} m`
+      }
+    }
+  } catch (e) {
+    console.warn('ODsay 조회 실패:', e)
+  }
+
+  const mins = Math.max(1, Math.round(distM / 67))
+  return { mode: 'walking', dur: `약 ${mins}분`, dist: distM >= 1000 ? `${(distM/1000).toFixed(1)} km` : `${Math.round(distM)} m` }
 }
 
 function calcDir(origin, dest) {
