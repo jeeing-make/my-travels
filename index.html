@@ -2109,9 +2109,18 @@ function openPlaceMoreModal(place, day) {
   </div>`
   modal.style.display = 'flex'
 
-  document.getElementById('pm-move-ok').onclick = () => {
+  document.getElementById('pm-move-ok').onclick = async () => {
     const newDayId = document.getElementById('pm-day-select').value
     if (newDayId === day.id) { closeModal(); return }
+
+    // 좌표가 있고 hoursWeek가 없으면 영업시간 정보 보강
+    if (place.lat != null && place.lng != null && !place.hoursWeek && typeof google !== 'undefined' && google.maps) {
+      try {
+        const detail = await queryPlacesNearby(place.name, { lat: place.lat, lng: place.lng })
+        if (detail && detail.hoursWeek) place.hoursWeek = detail.hoursWeek
+      } catch (e) { /* ignore */ }
+    }
+
     const list = DB.trips
     const t = list.find(x => x.id === trip.id)
     const oldDay = (t.days || []).find(d => d.id === day.id)
