@@ -10,6 +10,11 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Helvetica Neue',Helvetica,Arial,'Noto Sans KR','Noto Color Emoji',sans-serif;background:#fff;color:#000;-webkit-font-smoothing:antialiased}
 input,textarea,button{font-family:inherit}
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator{
+  position:absolute;left:0;top:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer;
+}
+input[type="time"],input[type="date"]{position:relative}
 button{cursor:pointer}
 
 /* NAV */
@@ -1550,6 +1555,21 @@ function shortPlaceName(name) {
 }
 
 const WEEKDAY = ['SUN','MON','TUE','WED','THU','FRI','SAT']
+
+// 장소의 요일별 영업시간(hoursWeek, 구글 weekday_text: [0]=월요일~[6]=일요일)에서
+// 해당 날짜(dateStr)의 요일에 맞는 줄을 반환. 없으면 기존 hours(레거시) 또는 기본 메시지.
+function getHoursForDate(place, dateStr) {
+  if (place.hoursWeek && Array.isArray(place.hoursWeek) && dateStr) {
+    const d = new Date(dateStr)
+    if (!isNaN(d)) {
+      const dow = d.getDay() // 0=일요일
+      const idx = dow === 0 ? 6 : dow - 1 // weekday_text: 0=월요일
+      if (place.hoursWeek[idx]) return place.hoursWeek[idx]
+    }
+  }
+  return place.hours || '영업시간 정보 없음'
+}
+
 function getWeekday(dateStr) {
   if (!dateStr) return ''
   const d = new Date(dateStr)
@@ -1632,14 +1652,6 @@ function renderPlaces() {
   const trip2 = DB.getTrip(state.tripId)
   const day2_ = (trip2.days || []).find(d => d.id === state.dayId)
   let places = day2_.places || []
-
-  // 해당 날짜의 항공편 표시 (보드카드 스타일)
-  ;(trip.flights || []).forEach(flight => {
-    const showDep = flight.depDate === day.date && flight.depName
-    const showArr = flight.arrDate === day.date && flight.arrName
-    if (!showDep && !showArr) return
-    list.appendChild(renderFlightCard(flight))
-  })
 
   // 일정 시작 — 전날 묵었던 숙소 → 첫 장소
   const hotelStart = getHotelForDate(trip, day.date, 'start')
@@ -1733,7 +1745,7 @@ function renderPlaces() {
           <button class="pmorebtn" data-pid="${place.id}">+</button>
         </div>
       </div>
-      <div class="phrs">${place.hours || '영업시간 정보 없음'}${place.address ? ` · ${place.address}` : ''}</div>
+      <div class="phrs">${getHoursForDate(place, day.date)}${place.address ? ` · ${place.address}` : ''}</div>
       <div class="pcost" data-pid="${place.id}"></div>
       <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
 
@@ -2234,12 +2246,11 @@ function queryPlacesNearby(name, coords) {
 
 function parsePlaceResult(r) {
   const oh = r.opening_hours
-  const dayOfWeek = new Date().getDay()
-  const idx = dayOfWeek === 0 ? 6 : dayOfWeek - 1
   const result = {
     name: r.name,
     category: guessCat(r.types || []),
-    hours: oh && oh.weekday_text ? (oh.weekday_text[idx] || '') : '',
+    hoursWeek: oh && oh.weekday_text ? oh.weekday_text : null,
+    hours: '', // 표시는 렌더 시점에 day.date 기준 요일로 결정
     isOpen: oh && typeof oh.isOpen === 'function' ? oh.isOpen() : null,
     lat: r.geometry && r.geometry.location ? r.geometry.location.lat() : null,
     lng: r.geometry && r.geometry.location ? r.geometry.location.lng() : null,
