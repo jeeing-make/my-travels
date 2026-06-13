@@ -761,29 +761,18 @@ function defaultCurrencyForCountry(code) {
   return COUNTRY_CURRENCY[code] || 'USD'
 }
 
-// 환율 캐시 (세션 내) — { 'JPY': { rate: 9.05, ts: ... } }  rate = 1 JPY -> KRW
+// 환율 캐시 (세션 내) — { 'JPY': rate } rate = 1 JPY -> KRW
 const fxCache = {}
 async function getFxRateToKRW(currency) {
   if (currency === 'KRW') return 1
   if (fxCache[currency]) return fxCache[currency]
 
-  // 1차: frankfurter.app
   try {
-    const res = await fetch(`https://api.frankfurter.app/latest?from=${currency}&to=KRW`)
+    const res = await fetch(`https://open.er-api.com/v6/latest/${currency}`)
     if (res.ok) {
       const data = await res.json()
       const rate = data.rates && data.rates.KRW
       if (rate) { fxCache[currency] = rate; return rate }
-    }
-  } catch (e) { console.warn(`환율 조회 실패 (frankfurter, ${currency}):`, e) }
-
-  // 2차 폴백: open.er-api.com
-  try {
-    const res2 = await fetch(`https://open.er-api.com/v6/latest/${currency}`)
-    if (res2.ok) {
-      const data2 = await res2.json()
-      const rate2 = data2.rates && data2.rates.KRW
-      if (rate2) { fxCache[currency] = rate2; return rate2 }
     }
   } catch (e) { console.warn(`환율 조회 실패 (er-api, ${currency}):`, e) }
 
@@ -1550,7 +1539,7 @@ function createDirBar(from, to, dirInfo, onResolved, label, countryCode) {
     if (hasCoords) {
       const mode = dirInfo.dirMode || 'walking'
       const url = isKorea
-        ? `https://map.kakao.com/?sName=${encodeURIComponent(from.address || from.name || '출발')}&eName=${encodeURIComponent(to.address || to.name || '도착')}`
+        ? `https://map.kakao.com/?sX=${from.lng}&sY=${from.lat}&sName=${encodeURIComponent(shortPlaceName(from.name) || from.address || '출발')}&eX=${to.lng}&eY=${to.lat}&eName=${encodeURIComponent(shortPlaceName(to.name) || to.address || '도착')}`
         : `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=${mode}`
       bar.onclick = () => window.open(url, '_blank')
     } else {
