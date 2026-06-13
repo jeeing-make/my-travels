@@ -1535,7 +1535,7 @@ function createDirBar(from, to, dirInfo, onResolved, label, countryCode) {
     if (hasCoords) {
       const mode = dirInfo.dirMode || 'walking'
       const url = isKorea
-        ? `https://map.kakao.com/?sName=${encodeURIComponent(from.name || '출발')}&eName=${encodeURIComponent(to.name || '도착')}&sX=${from.lng}&sY=${from.lat}&eX=${to.lng}&eY=${to.lat}`
+        ? `https://map.kakao.com/?sName=${encodeURIComponent(from.address || from.name || '출발')}&eName=${encodeURIComponent(to.address || to.name || '도착')}`
         : `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=${mode}`
       bar.onclick = () => window.open(url, '_blank')
     } else {
