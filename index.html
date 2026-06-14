@@ -177,6 +177,8 @@ button{cursor:pointer}
 .movebtn{font-size:8px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888;line-height:1.4}
 .pmorebtn{font-size:10px;border:.5px solid #ccc;background:#fff;padding:1px 7px;color:#888;line-height:1.4;font-weight:700}
 .pmorebtn:hover{border-color:#000;color:#000}
+.pmap-link{font-size:13px;text-decoration:none;opacity:.5;flex-shrink:0;line-height:1}
+.pmap-link:hover{opacity:1}
 .movebtn:hover:not(:disabled){border-color:#000;color:#000}
 .movebtn:disabled{opacity:.25;cursor:default}
 .dirbar{padding:8px 16px;background:#f7f7f7;display:flex;align-items:center;gap:8px;cursor:pointer;border-bottom:.5px solid #ddd}
@@ -272,6 +274,37 @@ button{cursor:pointer}
 .hotel-marker-icon{font-size:16px;flex-shrink:0}
 .hotel-marker-text{font-size:11px;color:#555;letter-spacing:.02em}
 .hotel-marker-name{font-weight:700;color:#000}
+
+/* 가이드 */
+#guide-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:300;align-items:center;justify-content:center;padding:20px}
+.guide-box{background:#fff;border:1px solid #000;width:100%;max-width:380px;display:flex;flex-direction:column}
+.guide-skip{padding:12px 18px 0;text-align:right}
+.guide-skip button{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;background:none;border:none}
+.guide-skip button:hover{color:#000}
+.guide-body{padding:8px 24px 20px;display:flex;flex-direction:column;gap:14px;min-height:340px}
+.guide-visual{height:160px;display:flex;align-items:center;justify-content:center;border:.5px solid #ddd;background:#fafafa;position:relative;overflow:hidden}
+.guide-tag{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888}
+.guide-title{font-size:22px;font-weight:900;letter-spacing:-.02em;line-height:1.15}
+.guide-desc{font-size:12px;color:#444;line-height:1.6}
+.guide-foot{padding:14px 18px;border-top:.5px solid #ddd;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.guide-dots{display:flex;gap:6px}
+.guide-dot{width:6px;height:6px;border-radius:50%;background:#ddd}
+.guide-dot.active{background:#000}
+.guide-nav{display:flex;gap:8px}
+.guide-btn{font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:8px 14px;color:#000}
+.guide-btn:hover{background:#000;color:#fff}
+.guide-btn:disabled{opacity:.25;cursor:default}
+.guide-btn:disabled:hover{background:#fff;color:#000}
+.guide-btn.primary{background:#000;color:#fff}
+.guide-btn.primary:hover{opacity:.8}
+
+/* 가이드 비주얼 — mock 화면 */
+.gv-card{position:absolute;border:1px solid #000;background:#fff}
+.gv-pulse{animation:gv-pulse 1.6s ease-in-out infinite}
+@keyframes gv-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.gv-arrow{position:absolute;font-size:20px}
+#guide-fab{display:none;position:fixed;bottom:18px;right:18px;width:40px;height:40px;border-radius:50%;background:#000;color:#fff;border:none;font-size:16px;z-index:90;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+#guide-fab.show{display:flex}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
@@ -349,6 +382,21 @@ button{cursor:pointer}
 </div>
 
 <div id="modal"></div>
+
+<div id="guide-overlay">
+  <div class="guide-box">
+    <div class="guide-skip"><button id="guide-skip">건너뛰기 ×</button></div>
+    <div class="guide-body" id="guide-body"></div>
+    <div class="guide-foot">
+      <div class="guide-dots" id="guide-dots"></div>
+      <div class="guide-nav">
+        <button class="guide-btn" id="guide-prev">← 이전</button>
+        <button class="guide-btn primary" id="guide-next">다음 →</button>
+      </div>
+    </div>
+  </div>
+</div>
+<button id="guide-fab" title="가이드 다시보기">?</button>
 
 <script>
 /* =========================================================
@@ -1662,14 +1710,17 @@ function renderPlaces() {
   let places = day2_.places || []
 
   // 일정 시작 — 전날 묵었던 숙소 → 첫 장소
+  // 날짜+방향별 키(dirS_날짜)로 저장해 다른 날짜/방향과 충돌 방지
   const hotelStart = getHotelForDate(trip, day.date, 'start')
   if (hotelStart && hotelStart.lat != null && places[0] && places[0].lat != null) {
     const first = places[0]
-    const bar = createDirBar(hotelStart, first, hotelStart, dir => {
+    const sKey = 'dirS_' + day.date
+    const startDirInfo = { dirMode: hotelStart[sKey+'_m'], dirDuration: hotelStart[sKey+'_d'], dirDistance: hotelStart[sKey+'_x'] }
+    const bar = createDirBar(hotelStart, first, startDirInfo, dir => {
       const list2 = DB.trips
       const t = list2.find(x => x.id === trip.id)
       const h = t.hotels.find(x => x === hotelStart || (x.input === hotelStart.input))
-      if (h) { h.dirMode = dir.mode; h.dirDuration = dir.dur; h.dirDistance = dir.dist; DB.save(list2) }
+      if (h) { h[sKey+'_m'] = dir.mode; h[sKey+'_d'] = dir.dur; h[sKey+'_x'] = dir.dist; DB.save(list2) }
       renderPlaces()
     }, `🏨 ${hotelStart.name || '숙소'} →`, day.countryCode)
     list.appendChild(bar)
@@ -1744,7 +1795,10 @@ function renderPlaces() {
       <div class="ptop">
         <div class="pleft">
           <div class="pcat">[ ${cat.e} ${cat.l} ]</div>
-          <div class="pname" data-pid="${place.id}" style="cursor:text">${place.name}</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div class="pname" data-pid="${place.id}" style="cursor:text">${place.name}</div>
+            ${place.lat != null ? `<a class="pmap-link" href="https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}" target="_blank" title="구글지도에서 보기">📍</a>` : ''}
+          </div>
         </div>
         <div class="pright">
           ${place.isOpen === true ? '<span class="open-b">OPEN</span>' : place.isOpen === false ? '<span class="closed-b">CLOSED</span>' : ''}
@@ -1802,11 +1856,13 @@ function renderPlaces() {
   const hotelEnd = getHotelForDate(trip, day.date, 'end')
   if (hotelEnd && hotelEnd.lat != null && places.length > 0 && places[places.length - 1].lat != null) {
     const last = places[places.length - 1]
-    const bar = createDirBar(last, hotelEnd, hotelEnd, dir => {
+    const eKey = 'dirE_' + day.date
+    const endDirInfo = { dirMode: hotelEnd[eKey+'_m'], dirDuration: hotelEnd[eKey+'_d'], dirDistance: hotelEnd[eKey+'_x'] }
+    const bar = createDirBar(last, hotelEnd, endDirInfo, dir => {
       const list2 = DB.trips
       const t = list2.find(x => x.id === trip.id)
       const h = t.hotels.find(x => x === hotelEnd || (x.input === hotelEnd.input))
-      if (h) { h.dirMode = dir.mode; h.dirDuration = dir.dur; h.dirDistance = dir.dist; DB.save(list2) }
+      if (h) { h[eKey+'_m'] = dir.mode; h[eKey+'_d'] = dir.dur; h[eKey+'_x'] = dir.dist; DB.save(list2) }
       renderPlaces()
     }, `→ 🏨 ${hotelEnd.name || '숙소'}`, day.countryCode)
     list.appendChild(bar)
@@ -2595,6 +2651,97 @@ function closeModal() {
 }
 
 /* =========================================================
+   온보딩 가이드
+   ========================================================= */
+const GUIDE_STEPS = [
+  {
+    tag: '[ STEP 1 / 5 ]',
+    title: 'TRIPS\n한눈에',
+    desc: '첫 화면에서는 등록한 여행들이 카드로 보여요. 다가오는 여행이 맨 위에 자동으로 올라오고, 카드를 누르면 일정 화면으로 이동해요.',
+    visual: () => `
+      <div class="gv-card gv-pulse" style="top:14px;left:14px;width:120px;height:90px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900">TOKYO<br>TRIP</div>
+      <div class="gv-card" style="top:14px;left:148px;width:120px;height:90px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#ccc">PARIS<br>TRIP</div>
+      <div style="position:absolute;bottom:14px;left:14px;font-size:9px;color:#888">+ 새 여행 추가</div>`
+  },
+  {
+    tag: '[ STEP 2 / 5 ]',
+    title: '카드 ⋮ 메뉴로\n수정·공유·삭제',
+    desc: '카드에 마우스를 올리면(또는 탭하면) 우측 상단에 ⋮ 메뉴가 나타나요. 여기서 여행 정보 수정, 읽기 전용 링크 공유, 삭제를 할 수 있어요.',
+    visual: () => `
+      <div class="gv-card" style="top:14px;left:90px;width:160px;height:120px"></div>
+      <div class="gv-card gv-pulse" style="top:22px;left:218px;width:24px;height:20px;display:flex;align-items:center;justify-content:center;font-size:12px">⋮</div>
+      <div style="position:absolute;top:48px;left:170px;font-size:9px;color:#888;text-align:right;line-height:1.8">수정<br>공유<br>삭제</div>`
+  },
+  {
+    tag: '[ STEP 3 / 5 ]',
+    title: '날짜별 일정 +\n숙소 · 교통편',
+    desc: '여행을 누르면 날짜별 리스트가 나와요. 상단의 [ 🏨 숙소 ]와 [ 🚐 교통편 ]을 펼쳐 구글맵 링크나 공항/기차역을 입력하면 자동으로 일정에 표시돼요.',
+    visual: () => `
+      <div class="gv-card gv-pulse" style="top:10px;left:14px;width:254px;height:34px;display:flex;align-items:center;padding-left:10px;font-size:10px">[ 🏨 숙소 ▾ ]</div>
+      <div class="gv-card" style="top:50px;left:14px;width:254px;height:34px;display:flex;align-items:center;padding-left:10px;font-size:10px;color:#aaa">[ 🚐 교통편 ▾ ]</div>
+      <div class="gv-card" style="top:92px;left:14px;width:254px;height:30px;display:flex;align-items:center;padding-left:10px;font-size:9px;color:#888">Day 1 · 12.04 THU</div>
+      <div class="gv-card" style="top:126px;left:14px;width:254px;height:30px;display:flex;align-items:center;padding-left:10px;font-size:9px;color:#888">Day 2 · 12.05 FRI</div>`
+  },
+  {
+    tag: '[ STEP 4 / 5 ]',
+    title: '장소 추가 &\n순서 변경',
+    desc: '날짜를 누르면 그날의 장소 목록이 나와요. 구글맵 링크나 장소 이름을 입력해 추가하고, ↑↓ 버튼으로 순서를 바꾸면 이동 경로(도보/대중교통)가 자동으로 계산돼요.',
+    visual: () => `
+      <div class="gv-card" style="top:10px;left:14px;width:254px;height:50px;padding:8px;font-size:10px;font-weight:700">📍 센소지<br><span style="font-size:8px;color:#888;font-weight:400">09:00 - 17:00 · OPEN</span></div>
+      <div style="position:absolute;top:64px;left:120px;font-size:8px;color:#888">— 🚶 도보 8분 —</div>
+      <div class="gv-card gv-pulse" style="top:80px;left:14px;width:254px;height:50px;padding:8px;font-size:10px;font-weight:700">📍 우에노 공원<br><span style="font-size:8px;color:#888;font-weight:400">↑ ↓ 로 순서 변경</span></div>
+      <div class="gv-card" style="top:140px;left:14px;width:254px;height:18px;display:flex;align-items:center;padding-left:10px;font-size:9px;color:#888">[ + 장소 추가 ]</div>`
+  },
+  {
+    tag: '[ STEP 5 / 5 ]',
+    title: '날씨 · 옷차림 ·\n비용까지 자동 계산',
+    desc: '해당 날짜의 날씨가 자동으로 표시되고, 옷차림은 직접 메모할 수 있어요. 장소마다 💰 버튼으로 금액과 화폐를 입력하면 그날 사용한 총액이 원화로 환산돼요.',
+    visual: () => `
+      <div class="gv-card" style="top:10px;left:14px;width:254px;height:46px;display:flex;align-items:center;gap:10px;padding:0 10px;font-size:11px">☀️ <span style="font-weight:700">맑음 · 12°C</span><span style="font-size:9px;color:#888;margin-left:auto">[ 옷차림 ] 코트</span></div>
+      <div class="gv-card gv-pulse" style="top:66px;left:14px;width:254px;height:28px;display:flex;align-items:center;padding-left:10px;font-size:9px">[ 일자별 사용금액 ] <b style="margin-left:6px">≈ ₩48,200</b></div>
+      <div class="gv-card" style="top:104px;left:14px;width:254px;height:50px;padding:8px;font-size:10px;font-weight:700">📍 이치란 라멘<br><span style="font-size:8px;color:#888;font-weight:400">💰 ¥1,200 · ≈ ₩11,400</span></div>`
+  }
+]
+
+let guideIdx = 0
+function renderGuideStep() {
+  const step = GUIDE_STEPS[guideIdx]
+  document.getElementById('guide-body').innerHTML = `
+    <div class="guide-visual">${step.visual()}</div>
+    <div class="guide-tag">${step.tag}</div>
+    <div class="guide-title" style="white-space:pre-line">${step.title}</div>
+    <div class="guide-desc">${step.desc}</div>`
+  document.getElementById('guide-dots').innerHTML = GUIDE_STEPS.map((_, i) =>
+    `<span class="guide-dot ${i === guideIdx ? 'active' : ''}"></span>`).join('')
+  const prevBtn = document.getElementById('guide-prev')
+  const nextBtn = document.getElementById('guide-next')
+  prevBtn.disabled = guideIdx === 0
+  nextBtn.textContent = guideIdx === GUIDE_STEPS.length - 1 ? '시작하기' : '다음 →'
+}
+
+function openGuide() {
+  guideIdx = 0
+  renderGuideStep()
+  document.getElementById('guide-overlay').style.display = 'flex'
+}
+function closeGuide() {
+  document.getElementById('guide-overlay').style.display = 'none'
+  localStorage.setItem('mt_guide_seen', '1')
+  document.getElementById('guide-fab').classList.add('show')
+}
+
+document.getElementById('guide-prev').onclick = () => { if (guideIdx > 0) { guideIdx--; renderGuideStep() } }
+document.getElementById('guide-next').onclick = () => {
+  if (guideIdx < GUIDE_STEPS.length - 1) { guideIdx++; renderGuideStep() }
+  else closeGuide()
+}
+document.getElementById('guide-skip').onclick = closeGuide
+document.getElementById('guide-fab').onclick = openGuide
+document.getElementById('guide-overlay').addEventListener('click', e => {
+  if (e.target.id === 'guide-overlay') closeGuide()
+})
+
+/* =========================================================
    INIT
    ========================================================= */
 // ── Supabase 동기화 ──
@@ -2745,7 +2892,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('modal').addEventListener('click', e => {
     if (e.target.id === 'modal') closeModal()
   })
-  if (!isShare) initAuth()
+  if (!isShare) {
+    initAuth()
+    if (!localStorage.getItem('mt_guide_seen')) {
+      openGuide()
+    } else {
+      document.getElementById('guide-fab').classList.add('show')
+    }
+  }
 })
 </script>
 
