@@ -29,7 +29,13 @@ button{cursor:pointer}
 .p1-hd{padding:32px 20px 24px;border-bottom:1px solid #000}
 .p1-ey{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888;margin-bottom:8px}
 .p1-ti{font-size:64px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88}
-.trip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+.trip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr))}
+@media(max-width:480px){
+  .tw1,.tw2,.tw3{font-size:clamp(40px,13vw,64px)}
+  .timg1{width:130px;height:56px}
+}
+@media(min-width:481px) and (max-width:860px){.trip-grid{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:861px){.trip-grid{grid-template-columns:repeat(auto-fill,minmax(420px,1fr))}}
 
 /* 카드 */
 .tcard{border-right:1px solid #000;border-bottom:1px solid #000;cursor:pointer;position:relative;background:#fff}
@@ -41,13 +47,13 @@ button{cursor:pointer}
 .tcard-menubtn{font-size:14px;color:#000;background:#fff;border:1px solid #000;padding:0 6px;line-height:1.6}
 .tcard-menubtn:hover{background:#000;color:#fff}
 .tcard-menu{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
-.tcard-body{padding:18px 20px 0}
-.tw1{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block}
+.tcard-body{padding:18px 20px 0;min-width:0}
+.tw1{font-size:clamp(36px,8vw,56px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;white-space:nowrap;overflow:hidden;text-overflow:clip}
 .trow2{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:6px}
-.timg1{width:160px;height:64px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:22px;border-radius:14px}
+.timg1{width:140px;height:60px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:22px;border-radius:14px}
 .timg1 img{width:100%;height:100%;object-fit:cover;display:block}
-.tw2{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;text-align:right;flex:1}
-.tw3{font-size:56px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;margin-top:6px}
+.tw2{font-size:clamp(36px,8vw,56px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;text-align:right;flex:1;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.tw3{font-size:clamp(36px,8vw,56px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:clip}
 .tfoot{border-top:.5px solid #ddd;margin-top:16px;padding:12px 20px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .tmeta{flex:1;display:flex;flex-direction:column;gap:1px}
 .tml{letter-spacing:.06em;text-transform:uppercase;color:#888;line-height:1.25}
@@ -374,7 +380,7 @@ button{cursor:pointer}
   <div class="places" id="p3-places"></div>
   <div class="add-place">
     <div class="add-place-title">[ + 장소 추가 ]</div>
-    <div class="add-place-hint">구글맵 링크(maps.app.goo.gl) 또는 장소 이름 직접 입력<br>단축 URL은 이름 입력창이 뜹니다</div>
+    <div class="add-place-hint">구글맵 링크 또는 장소 이름 직접 입력<br>📱 폰: 구글맵 앱 → 장소 선택 → 공유 → 링크 복사<br>💻 컴: 주소창 URL 그대로 붙여넣기</div>
     <div class="add-place-row">
       <input class="add-place-in" id="place-in" type="text" placeholder="https://maps.app.goo.gl/... 또는 센소지"/>
       <button class="add-place-btn" id="place-btn">추가 →</button>
@@ -556,8 +562,32 @@ const state = { page: 'p1', tripId: null, dayId: null, shareMode: false, shareDa
 
 function go(page, params) {
   Object.assign(state, { page }, params || {})
+  // 브라우저 히스토리에 상태 기록 → 모바일 뒤로가기가 앱 내 이동으로 동작
+  const histState = { page: state.page, tripId: state.tripId, dayId: state.dayId }
+  if (page === 'p1') {
+    history.pushState(histState, '', location.pathname)
+  } else if (page === 'p2') {
+    history.pushState(histState, '', location.pathname + '?trip=' + state.tripId)
+  } else if (page === 'p3') {
+    history.pushState(histState, '', location.pathname + '?trip=' + state.tripId + '&day=' + state.dayId)
+  }
   renderPage()
 }
+
+// 모바일/브라우저 뒤로가기 가로채기
+window.addEventListener('popstate', e => {
+  // share 모드면 건드리지 않음
+  if (state.shareMode) return
+  const s = e.state
+  if (s && s.page) {
+    Object.assign(state, { page: s.page, tripId: s.tripId || null, dayId: s.dayId || null })
+    renderPage()
+  } else {
+    // 히스토리 최상단(앱 진입점) — p1으로
+    Object.assign(state, { page: 'p1', tripId: null, dayId: null })
+    renderPage()
+  }
+})
 
 function renderPage() {
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'))
@@ -1937,21 +1967,29 @@ function renderPlaces() {
 /* =========================================================
    장소 추가
    ========================================================= */
-// 단축 URL(maps.app.goo.gl) 펼치기 — 타임아웃 3초로 제한, 느리면 바로 포기
+// 단축 URL(maps.app.goo.gl) 펼치기 — 여러 프록시 순차 시도, 5초 타임아웃
 async function expandShortUrl(url) {
-  try {
-    const proxyUrl = 'https://corsproxy.io/?url=' + encodeURIComponent(url)
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 3000)
-    const res = await fetch(proxyUrl, { redirect: 'follow', signal: controller.signal })
-    clearTimeout(timeout)
-    const finalUrl = res.url || url
-    if (finalUrl && finalUrl !== proxyUrl) return finalUrl
-    const text = await res.text()
-    const m = text.match(/https:\/\/www\.google\.com\/maps[^"'\s]+/)
-    if (m) return m[0]
-  } catch (e) {
-    console.warn('단축 URL 펼치기 실패/타임아웃:', e)
+  const proxies = [
+    'https://corsproxy.io/?url=',
+    'https://api.allorigins.win/raw?url=',
+  ]
+  for (const proxy of proxies) {
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5000)
+      const res = await fetch(proxy + encodeURIComponent(url), { redirect: 'follow', signal: controller.signal })
+      clearTimeout(timeout)
+      // redirect 후 최종 URL에 구글맵 URL이 담겨 있는 경우
+      const finalUrl = res.url || ''
+      if (finalUrl.includes('google.com/maps')) return finalUrl
+      // HTML 본문에서 구글맵 URL 추출
+      const text = await res.text()
+      const m = text.match(/https:\/\/www\.google\.com\/maps\/(?:place|search)[^"'\s\\]+/)
+         || text.match(/https:\/\/maps\.google\.com[^"'\s\\]+/)
+      if (m) return m[0]
+    } catch (e) {
+      console.warn('단축 URL 펼치기 실패:', proxy, e.message)
+    }
   }
   return null
 }
@@ -1988,8 +2026,17 @@ async function doAddPlace() {
 
     // 단축 URL이면 먼저 펼치기
     if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
+      const shortUrlOriginal = raw
       const expanded = await expandShortUrl(raw)
-      if (expanded) raw = expanded
+      if (expanded) {
+        raw = expanded
+      } else {
+        // 펼치기 실패 — 이름 입력 모달 (폰에서 단축 URL 붙여넣은 경우)
+        btn.textContent = '추가 →'; btn.disabled = false
+        inp.value = ''
+        openNameModal('📍 장소 이름을 직접 입력해주세요\n(단축 URL은 폰에서 펼치기가 안 될 수 있어요)')
+        return
+      }
     }
 
     // 좌표 추출 (날씨용 + 장소 lat/lng)
@@ -2300,7 +2347,8 @@ function openPlaceMoreModal(place, day) {
   }
 }
 
-function openNameModal() {
+function openNameModal(hintMsg) {
+  const hint = hintMsg || '구글맵 단축 URL은 장소 이름으로 검색합니다'
   const modal = document.getElementById('modal')
   modal.innerHTML = `<div class="mbox">
     <div class="mhd">
@@ -2310,8 +2358,8 @@ function openNameModal() {
     <div class="mbody">
       <div class="mfield">
         <span class="mlbl">장소 이름</span>
-        <span class="mhint">구글맵 단축 URL은 장소 이름으로 검색합니다</span>
-        <input class="min" id="name-in" placeholder="예) 센소지" autofocus/>
+        <span class="mhint" style="white-space:pre-line">${hint}</span>
+        <input class="min" id="name-in" placeholder="예) 센소지, Aubergine Persian Restaurant" autofocus/>
       </div>
     </div>
     <div class="mfoot"><button class="mbtn" id="name-ok">추가 →</button></div>
@@ -3180,6 +3228,10 @@ async function initShareView() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   const isShare = await initShareView()
+  // 초기 히스토리 베이스 심기 — 뒤로가기가 앱 밖으로 나가지 않도록
+  if (!isShare) {
+    history.replaceState({ page: 'p1', tripId: null, dayId: null }, '', location.pathname)
+  }
   renderPage()
   document.getElementById('modal').addEventListener('click', e => {
     if (e.target.id === 'modal') closeModal()
