@@ -380,7 +380,7 @@ button{cursor:pointer}
   <div class="places" id="p3-places"></div>
   <div class="add-place">
     <div class="add-place-title">[ + 장소 추가 ]</div>
-    <div class="add-place-hint">구글맵 링크 또는 장소 이름 직접 입력<br>📱 폰: 구글맵 앱 → 장소 선택 → 공유 → 링크 복사<br>💻 컴: 주소창 URL 그대로 붙여넣기</div>
+    <div class="add-place-hint">구글맵 링크 또는 장소 이름 직접 입력<br>📱 모바일 앱: 장소 클릭 → 이름 꾹 누르기 → 복사 → 붙여넣기<br>💻 컴: 주소창 URL 그대로 붙여넣기</div>
     <div class="add-place-row">
       <input class="add-place-in" id="place-in" type="text" placeholder="https://maps.app.goo.gl/... 또는 센소지"/>
       <button class="add-place-btn" id="place-btn">추가 →</button>
@@ -1042,7 +1042,7 @@ async function backfillPlaceIds(tripId, dayId) {
         DB.updatePlace(tripId, dayId, place.id, { placeId: detail.placeId })
         // 지도 아이콘 링크 즉시 갱신
         const anchor = document.querySelector(`.pmap-link[data-pid="${place.id}"]`)
-        if (anchor) anchor.href = `https://www.google.com/maps/place/?q=place_id:${detail.placeId}`
+        if (anchor) anchor.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&query_place_id=${detail.placeId}`
       }
     } catch (e) { /* 개별 실패는 조용히 무시 */ }
     // API 과호출 방지: 장소 간 300ms 간격
@@ -1878,9 +1878,9 @@ function renderPlaces() {
           <div style="display:flex;align-items:center;gap:6px">
             <div class="pname" data-pid="${place.id}" style="cursor:text">${place.name}</div>
             ${place.lat != null ? (() => {
-              const mapUrl = place.placeId
-                ? `https://www.google.com/maps/place/?q=place_id:${place.placeId}`
-                : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&center=${place.lat},${place.lng}`
+              const mapUrl = place.lat != null
+                ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&query_place_id=${place.placeId || ''}`
+                : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`
               return `<a class="pmap-link" data-pid="${place.id}" href="${mapUrl}" target="_blank" title="구글지도에서 보기">📍</a>`
             })() : ''}
           </div>
@@ -2225,11 +2225,20 @@ async function openShareModal(trip) {
     }
 
     const tripLatest = DB.getTrip(trip.id)
-    const { error } = await supa.from('shared_trips').upsert([
-      { share_id: shareId,  trip_data: tripLatest, mode: 'readonly' },
-      { share_id: collabId, trip_data: tripLatest, mode: 'collab'   }
-    ])
-    if (error) throw error
+
+    // 읽기전용 업서트
+    const r1 = await supa.from('shared_trips').upsert({ share_id: shareId, trip_data: tripLatest, mode: 'readonly' })
+    if (r1.error) {
+      // mode 컬럼 없는 경우 폴백
+      const r1b = await supa.from('shared_trips').upsert({ share_id: shareId, trip_data: tripLatest })
+      if (r1b.error) throw r1b.error
+    }
+    // 편집 업서트
+    const r2 = await supa.from('shared_trips').upsert({ share_id: collabId, trip_data: tripLatest, mode: 'collab' })
+    if (r2.error) {
+      const r2b = await supa.from('shared_trips').upsert({ share_id: collabId, trip_data: tripLatest })
+      if (r2b.error) throw r2b.error
+    }
 
     const base = `${location.origin}${location.pathname}`
     const roUrl = `${base}?share=${shareId}`
