@@ -963,11 +963,42 @@ function renderP3() {
   }
 
   renderPlaces()
+  backfillPlaceIds(state.tripId, state.dayId)
 
   const btn = document.getElementById('place-btn')
   const inp = document.getElementById('place-in')
   btn.onclick = () => doAddPlace()
   inp.onkeydown = e => { if (e.key === 'Enter') doAddPlace() }
+}
+
+/* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만) ── */
+async function backfillPlaceIds(tripId, dayId) {
+  if (typeof google === 'undefined' || !google.maps || !google.maps.places) return
+  const trip = DB.getTrip(tripId)
+  if (!trip) return
+  const day = (trip.days || []).find(d => d.id === dayId)
+  if (!day) return
+
+  const targets = (day.places || []).filter(p =>
+    p.category !== 'transport' && p.lat != null && !p.placeId
+  )
+  if (!targets.length) return
+
+  for (const place of targets) {
+    // 현재 tripId/dayId와 여전히 같은 페이지인지 확인 (페이지 이동 시 중단)
+    if (state.tripId !== tripId || state.dayId !== dayId) return
+    try {
+      const detail = await queryPlacesNearby(place.name, { lat: place.lat, lng: place.lng })
+      if (detail && detail.placeId) {
+        DB.updatePlace(tripId, dayId, place.id, { placeId: detail.placeId })
+        // 지도 아이콘 링크 즉시 갱신
+        const anchor = document.querySelector(`.pmap-link[data-pid="${place.id}"]`)
+        if (anchor) anchor.href = `https://www.google.com/maps/place/?q=place_id:${detail.placeId}`
+      }
+    } catch (e) { /* 개별 실패는 조용히 무시 */ }
+    // API 과호출 방지: 장소 간 300ms 간격
+    await new Promise(r => setTimeout(r, 300))
+  }
 }
 
 /* ── 2페이지 숙소 관리 ── */
@@ -1797,7 +1828,12 @@ function renderPlaces() {
           <div class="pcat">[ ${cat.e} ${cat.l} ]</div>
           <div style="display:flex;align-items:center;gap:6px">
             <div class="pname" data-pid="${place.id}" style="cursor:text">${place.name}</div>
-            ${place.lat != null ? `<a class="pmap-link" href="https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}" target="_blank" title="구글지도에서 보기">📍</a>` : ''}
+            ${place.lat != null ? (() => {
+              const mapUrl = place.placeId
+                ? `https://www.google.com/maps/place/?q=place_id:${place.placeId}`
+                : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&center=${place.lat},${place.lng}`
+              return `<a class="pmap-link" data-pid="${place.id}" href="${mapUrl}" target="_blank" title="구글지도에서 보기">📍</a>`
+            })() : ''}
           </div>
         </div>
         <div class="pright">
@@ -2261,7 +2297,7 @@ function queryPlaces(input) {
     const doDetail = id => {
       svc.getDetails({ placeId: id, fields }, (r, s) => {
         clearTimeout(timeout)
-        if (s === 'OK') finish(parsePlaceResult(r))
+        if (s === 'OK') finish(parsePlaceResult(r, id))
         else finish(null)
       })
     }
@@ -2307,7 +2343,7 @@ function queryPlacesNearby(name, coords) {
             { placeId: res[0].place_id, fields: ['name', 'types', 'opening_hours', 'geometry', 'business_status', 'formatted_address'] },
             (r, s2) => {
               clearTimeout(timeout)
-              if (s2 === 'OK') finish(parsePlaceResult(r))
+              if (s2 === 'OK') finish(parsePlaceResult(r, res[0].place_id))
               else finish(null)
             }
           )
@@ -2317,17 +2353,18 @@ function queryPlacesNearby(name, coords) {
   })
 }
 
-function parsePlaceResult(r) {
+function parsePlaceResult(r, placeId) {
   const oh = r.opening_hours
   const result = {
     name: r.name,
     category: guessCat(r.types || []),
     hoursWeek: oh && oh.weekday_text ? oh.weekday_text : null,
-    hours: '', // 표시는 렌더 시점에 day.date 기준 요일로 결정
+    hours: '',
     isOpen: oh && typeof oh.isOpen === 'function' ? oh.isOpen() : null,
     lat: r.geometry && r.geometry.location ? r.geometry.location.lat() : null,
     lng: r.geometry && r.geometry.location ? r.geometry.location.lng() : null,
     address: r.formatted_address || '',
+    placeId: placeId || null,
     memo: ''
   }
   return result
@@ -2345,35 +2382,10 @@ function haversineDist(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
 }
 
-// 한국: ODsay 대중교통 API로 소요시간 조회. 2km 이하면 도보(직선거리 기반 추정), 초과면 대중교통.
+// 한국: Google Directions API 사용 (ODsay는 브라우저 CORS 차단됨)
+// 2km 이하 도보, 초과 시 대중교통. 카카오맵 링크는 createDirBar에서 별도 처리.
 async function calcDirKorea(origin, dest) {
-  const distM = haversineDist(origin.lat, origin.lng, dest.lat, dest.lng)
-
-  if (distM <= 2000) {
-    const mins = Math.max(1, Math.round(distM / 67))
-    return { mode: 'walking', dur: `약 ${mins}분`, dist: distM >= 1000 ? `${(distM/1000).toFixed(1)} km` : `${Math.round(distM)} m` }
-  }
-
-  try {
-    const url = `https://api.odsay.com/v1/api/searchPubTransPathT?SX=${origin.lng}&SY=${origin.lat}&EX=${dest.lng}&EY=${dest.lat}&apiKey=${ODSAY_API_KEY}`
-    const res = await fetch(url)
-    const data = await res.json()
-    const path = data.result && data.result.path && data.result.path[0]
-    if (path && path.info) {
-      const totalTime = path.info.totalTime
-      const totalDist = path.info.totalDistance
-      return {
-        mode: 'transit',
-        dur: `약 ${totalTime}분`,
-        dist: totalDist >= 1000 ? `${(totalDist/1000).toFixed(1)} km` : `${totalDist} m`
-      }
-    }
-  } catch (e) {
-    console.warn('ODsay 조회 실패:', e)
-  }
-
-  const mins = Math.max(1, Math.round(distM / 67))
-  return { mode: 'walking', dur: `약 ${mins}분`, dist: distM >= 1000 ? `${(distM/1000).toFixed(1)} km` : `${Math.round(distM)} m` }
+  return calcDir(origin, dest)
 }
 
 function calcDir(origin, dest) {
