@@ -42,6 +42,7 @@ button{cursor:pointer}
 .tcard:hover{background:#fafafa}
 .tcard-ov{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;align-items:flex-end;gap:4px;opacity:0;transition:opacity .15s;z-index:5}
 .tcard:hover .tcard-ov,.tcard-ov.menu-open{opacity:1}
+@media(hover:none){.tcard-ov{opacity:1}}
 .tcard-ovbtn{font-size:8px;letter-spacing:.08em;text-transform:uppercase;border:1px solid #000;background:#fff;padding:2px 8px}
 .tcard-ovbtn:hover{background:#000;color:#fff}
 .tcard-menubtn{font-size:14px;color:#000;background:#fff;border:1px solid #000;padding:0 6px;line-height:1.6}
@@ -3176,27 +3177,35 @@ async function initShareView() {
   const shareId = params.get('share')
   if (!shareId || !supa) return false
   try {
+    // mode 컬럼이 있을 수도 없을 수도 있으니 trip_data만 확실히 select
     const { data, error } = await supa.from('shared_trips').select('trip_data, mode').eq('share_id', shareId).maybeSingle()
     if (error || !data) {
-      alert('공유 링크를 찾을 수 없거나 만료되었어요.')
-      return false
+      // mode 컬럼 없는 경우 폴백
+      const { data: data2, error: error2 } = await supa.from('shared_trips').select('trip_data').eq('share_id', shareId).maybeSingle()
+      if (error2 || !data2) { alert('공유 링크를 찾을 수 없거나 만료되었어요.'); return false }
+      state.shareMode = true
+      state.shareData = data2.trip_data
+      state.tripId = data2.trip_data.id
+      state.page = 'p2'
+      return true
     }
-    const isCollab = data.mode === 'collab'
-    state.shareMode = !isCollab   // collab이면 shareMode=false → 편집 UI 표시
+
+    // collabId는 'c'로 시작, shareId는 's'로 시작 — prefix로도 구분 가능
+    const isCollab = data.mode === 'collab' || shareId.startsWith('c')
+    state.shareMode = !isCollab
     state.shareData = data.trip_data
     state.tripId = data.trip_data.id
     state.page = 'p2'
 
     if (isCollab) {
       collabShareId = shareId
-      // collab 모드: localStorage에 trip 데이터 주입 (DB.trips가 읽을 수 있도록)
       const existing = JSON.parse(localStorage.getItem('mt_trips') || '[]')
       const idx = existing.findIndex(t => t.id === data.trip_data.id)
       if (idx >= 0) existing[idx] = data.trip_data
       else existing.unshift(data.trip_data)
       localStorage.setItem('mt_trips', JSON.stringify(existing))
 
-      // Realtime 구독 — 다른 편집자가 변경하면 로컬도 갱신
+      // Realtime 구독
       collabChannel = supa.channel('collab:' + shareId)
         .on('postgres_changes', {
           event: 'UPDATE', schema: 'public', table: 'shared_trips',
@@ -3213,14 +3222,14 @@ async function initShareView() {
         })
         .subscribe()
 
-      // collab 저장 훅 — DB.save 오버라이드
+      // collab 저장 훅
       const origSave = DB.save.bind(DB)
       DB.save = function(t) {
         origSave(t)
         pushCollabData()
       }
 
-      // 상단 배지 표시
+      // 상단 배지
       document.querySelector('.share-mode-badge')?.remove?.()
       const badge = document.createElement('span')
       badge.style.cssText = 'font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;padding:4px 8px;color:#000;background:#fffbe6'
