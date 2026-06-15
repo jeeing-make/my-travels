@@ -29,13 +29,10 @@ button{cursor:pointer}
 .p1-hd{padding:32px 20px 24px;border-bottom:1px solid #000}
 .p1-ey{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#888;margin-bottom:8px}
 .p1-ti{font-size:64px;font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88}
-.trip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr))}
-@media(max-width:480px){
-  .tw1,.tw2,.tw3{font-size:clamp(40px,13vw,64px)}
-  .timg1{width:130px;height:56px}
-}
-@media(min-width:481px) and (max-width:860px){.trip-grid{grid-template-columns:repeat(2,1fr)}}
-@media(min-width:861px){.trip-grid{grid-template-columns:repeat(auto-fill,minmax(420px,1fr))}}
+.trip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));max-width:100%}
+/* 카드 최대 2열 — 3열 이상 되면 글자 깨짐 방지 */
+@media(min-width:641px){.trip-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){.trip-grid{grid-template-columns:1fr}}
 
 /* 카드 */
 .tcard{border-right:1px solid #000;border-bottom:1px solid #000;cursor:pointer;position:relative;background:#fff}
@@ -49,12 +46,18 @@ button{cursor:pointer}
 .tcard-menubtn:hover{background:#000;color:#fff}
 .tcard-menu{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
 .tcard-body{padding:18px 20px 0;min-width:0}
-.tw1{font-size:clamp(36px,8vw,56px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;white-space:nowrap;overflow:hidden;text-overflow:clip}
+/* 2열 기준: 카드 너비 = ~50vw. 6글자가 들어가려면 글자당 약 7~8vw */
+.tw1{font-size:clamp(32px,6.5vw,52px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;white-space:nowrap;overflow:hidden;text-overflow:clip}
 .trow2{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:6px}
-.timg1{width:140px;height:60px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:22px;border-radius:14px}
+.timg1{width:130px;height:56px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:22px;border-radius:14px}
 .timg1 img{width:100%;height:100%;object-fit:cover;display:block}
-.tw2{font-size:clamp(36px,8vw,56px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;text-align:right;flex:1;white-space:nowrap;overflow:hidden;text-overflow:clip}
-.tw3{font-size:clamp(36px,8vw,56px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.tw2{font-size:clamp(32px,6.5vw,52px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;text-align:right;flex:1;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.tw3{font-size:clamp(32px,6.5vw,52px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:clip}
+/* 모바일 1열: 카드 = 100vw이므로 글자 더 크게 */
+@media(max-width:640px){
+  .tw1,.tw2,.tw3{font-size:clamp(44px,12vw,64px)}
+  .timg1{width:150px;height:60px}
+}
 .tfoot{border-top:.5px solid #ddd;margin-top:16px;padding:12px 20px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .tmeta{flex:1;display:flex;flex-direction:column;gap:1px}
 .tml{letter-spacing:.06em;text-transform:uppercase;color:#888;line-height:1.25}
