@@ -841,13 +841,17 @@ async function getFxRateToKRW(currency) {
 }
 
 function renderP2() {
-  const trip = DB.getTrip(state.tripId)
+  let trip = DB.getTrip(state.tripId)
   if (!trip) return
   document.getElementById('p2-sub').textContent = `${trip.dateStart || ''} – ${trip.dateEnd || ''}  ·  ${trip.countries || ''}`
   document.getElementById('p2-ti').textContent = cleanName(trip.name)
 
   renderP2Hotels(trip)
   renderP2Flights(trip)
+
+  // Hotels/Flights 렌더 중 DB.save가 호출될 수 있으므로 최신 데이터 다시 읽기
+  trip = DB.getTrip(state.tripId)
+  if (!trip) return
 
   // 날짜 기준 자동 정렬 (날짜 없는 항목은 뒤로)
   if (trip.days && trip.days.length > 1) {
@@ -861,6 +865,7 @@ function renderP2() {
     if (changed) {
       trip.days = sorted
       DB.updateTrip(trip.id, { days: sorted })
+      trip = DB.getTrip(state.tripId)  // 정렬 저장 후 다시 읽기
     }
   }
 
@@ -2159,44 +2164,73 @@ async function openShareModal(trip) {
   modal.style.display = 'flex'
 
   try {
+    // 읽기전용 shareId
     let shareId = trip.shareId
     if (!shareId) {
       shareId = 's' + Date.now() + Math.random().toString(36).slice(2, 8)
-      const list = DB.trips
-      const t = list.find(x => x.id === trip.id)
-      t.shareId = shareId
-      DB.save(list)
+      const list = DB.trips; const t = list.find(x => x.id === trip.id); t.shareId = shareId; DB.save(list)
+    }
+    // 동시편집 collabId (별도 접두어 'c')
+    let collabId = trip.collabId
+    if (!collabId) {
+      collabId = 'c' + Date.now() + Math.random().toString(36).slice(2, 8)
+      const list = DB.trips; const t = list.find(x => x.id === trip.id); t.collabId = collabId; DB.save(list)
     }
 
-    // 최신 데이터로 업서트
-    const { error } = await supa.from('shared_trips').upsert({ share_id: shareId, trip_data: trip })
+    const tripLatest = DB.getTrip(trip.id)
+    const { error } = await supa.from('shared_trips').upsert([
+      { share_id: shareId,  trip_data: tripLatest, mode: 'readonly' },
+      { share_id: collabId, trip_data: tripLatest, mode: 'collab'   }
+    ])
     if (error) throw error
 
-    const url = `${location.origin}${location.pathname}?share=${shareId}`
+    const base = `${location.origin}${location.pathname}`
+    const roUrl = `${base}?share=${shareId}`
+    const coUrl = `${base}?share=${collabId}`
+
     const statusEl = document.getElementById('share-status')
-    if (statusEl) {
-      statusEl.innerHTML = `
-        <div style="font-size:10px;color:#000;margin-bottom:8px">아래 링크를 공유하면 누구나 로그인 없이 읽기 전용으로 볼 수 있어요.</div>
-        <div style="display:flex;gap:6px">
-          <input class="min" id="share-url" value="${url}" readonly style="flex:1;font-size:10px"/>
-          <button class="mbtn" id="share-copy" style="white-space:nowrap">복사</button>
+    if (!statusEl) return
+    statusEl.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;margin-bottom:6px">[ 읽기 전용 ]</div>
+          <div style="font-size:10px;color:#555;margin-bottom:6px">링크를 받은 사람은 로그인 없이 일정을 볼 수 있어요.</div>
+          <div style="display:flex;gap:6px">
+            <input class="min" id="share-url-ro" value="${roUrl}" readonly style="flex:1;font-size:10px"/>
+            <button class="mbtn" id="share-copy-ro" style="white-space:nowrap">복사</button>
+          </div>
         </div>
-        <div style="margin-top:10px"><button class="mbtn" id="share-revoke" style="border-color:#c00;color:#c00">공유 중단</button></div>`
-      document.getElementById('share-copy').onclick = () => {
-        const inp = document.getElementById('share-url')
+        <div style="border-top:.5px solid #eee;padding-top:14px">
+          <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;margin-bottom:6px">[ ✏️ 함께 편집 ]</div>
+          <div style="font-size:10px;color:#555;margin-bottom:6px">링크를 받은 사람이 직접 장소·메모를 추가·수정할 수 있어요. 변경사항이 실시간으로 반영돼요.</div>
+          <div style="display:flex;gap:6px">
+            <input class="min" id="share-url-co" value="${coUrl}" readonly style="flex:1;font-size:10px"/>
+            <button class="mbtn" id="share-copy-co" style="white-space:nowrap">복사</button>
+          </div>
+        </div>
+        <div style="border-top:.5px solid #eee;padding-top:10px">
+          <button class="mbtn" id="share-revoke" style="border-color:#c00;color:#c00;font-size:9px">공유 전체 중단</button>
+        </div>
+      </div>`
+
+    const copyBtn = (btnId, inputId) => {
+      document.getElementById(btnId).onclick = () => {
+        const inp = document.getElementById(inputId)
         inp.select()
         navigator.clipboard?.writeText(inp.value)
-        document.getElementById('share-copy').textContent = '복사됨!'
+        document.getElementById(btnId).textContent = '복사됨!'
+        setTimeout(() => { const b = document.getElementById(btnId); if (b) b.textContent = '복사' }, 2000)
       }
-      document.getElementById('share-revoke').onclick = async () => {
-        if (!confirm('공유를 중단하면 기존 링크가 더 이상 작동하지 않아요. 계속할까요?')) return
-        await supa.from('shared_trips').delete().eq('share_id', shareId)
-        const list = DB.trips
-        const t = list.find(x => x.id === trip.id)
-        delete t.shareId
-        DB.save(list)
-        closeModal()
-      }
+    }
+    copyBtn('share-copy-ro', 'share-url-ro')
+    copyBtn('share-copy-co', 'share-url-co')
+
+    document.getElementById('share-revoke').onclick = async () => {
+      if (!confirm('공유를 중단하면 읽기전용·편집 링크 모두 작동하지 않아요. 계속할까요?')) return
+      await supa.from('shared_trips').delete().in('share_id', [shareId, collabId])
+      const list = DB.trips; const t = list.find(x => x.id === trip.id)
+      delete t.shareId; delete t.collabId; DB.save(list)
+      closeModal()
     }
   } catch (e) {
     console.error('공유 실패:', e)
@@ -2664,7 +2698,7 @@ function openDayModal(tripId, editDayId) {
 
   document.getElementById('btn-daysave').onclick = () => {
     const date = document.getElementById('f-date').value
-    const memo = document.getElementById('f-dmemo').value.trim()
+    const memo = document.getElementById('f-dmemo').value  // trim() 제거 — 빈 메모도 저장
     if (editDayId) {
       DB.updateDay(tripId, editDayId, { date, memo })
     } else {
@@ -2999,7 +3033,6 @@ async function renderAdminList() {
   const el = document.getElementById('admin-list')
   if (!el) return
   try {
-    // allowed_users 전체 조회 (어드민만 RLS 통과)
     const { data, error } = await supa.from('allowed_users').select('user_id, email, added_at').order('added_at', { ascending: false })
     if (error) { el.textContent = '불러오기 실패: ' + error.message; return }
     if (!data || !data.length) { el.textContent = '등록된 유저가 없어요.'; return }
@@ -3008,16 +3041,16 @@ async function renderAdminList() {
       <div style="display:flex;flex-direction:column;gap:0">
         <div style="display:flex;padding:6px 0;border-bottom:.5px solid #ddd;font-size:9px;letter-spacing:.08em;color:#aaa;text-transform:uppercase">
           <span style="flex:1">이메일</span>
-          <span style="width:80px;text-align:right">가입일</span>
+          <span style="width:84px;text-align:right;padding-right:4px">가입일</span>
           <span style="width:48px;text-align:right">접근</span>
         </div>
         ${data.map(u => {
           const isMe = u.email === ADMIN_EMAIL
           const date = u.added_at ? u.added_at.slice(0, 10) : '—'
-          return `<div style="display:flex;align-items:center;padding:8px 0;border-bottom:.5px solid #f0f0f0;gap:6px">
-            <span style="flex:1;font-size:10px;color:${isMe ? '#000' : '#333'};font-weight:${isMe ? '700' : '400'}">${u.email || u.user_id.slice(0,8)+'…'}${isMe ? ' ⚙️' : ''}</span>
-            <span style="width:80px;text-align:right;font-size:9px;color:#aaa">${date}</span>
-            <span style="width:48px;text-align:right">
+          return `<div style="display:flex;align-items:center;padding:8px 0;border-bottom:.5px solid #f0f0f0;gap:4px">
+            <span style="flex:1;font-size:10px;color:${isMe ? '#000' : '#333'};font-weight:${isMe ? '700' : '400'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.email || u.user_id.slice(0,12)+'…'}${isMe ? ' ⚙️' : ''}</span>
+            <span style="width:84px;text-align:right;font-size:9px;color:#aaa;flex-shrink:0;padding-right:4px">${date}</span>
+            <span style="width:48px;text-align:right;flex-shrink:0">
               ${isMe
                 ? '<span style="font-size:9px;color:#888">어드민</span>'
                 : `<button class="admin-toggle-btn" data-uid="${u.user_id}" data-email="${u.email || ''}" style="font-size:9px;letter-spacing:.06em;border:.5px solid #c00;background:#fff;padding:3px 7px;color:#c00;cursor:pointer">차단</button>`
@@ -3032,7 +3065,7 @@ async function renderAdminList() {
       btn.onclick = async () => {
         const uid = btn.dataset.uid
         const email = btn.dataset.email
-        if (!confirm(`${email || uid} 의 접근을 차단할까요?\n(데이터는 유지되고 계정만 잠겨요)`)) return
+        if (!confirm(`${email || uid} 의 접근을 차단할까요?\n(데이터는 유지되고 접근만 막혀요)`)) return
         btn.textContent = '처리 중…'
         btn.disabled = true
         const { error } = await supa.from('allowed_users').delete().eq('user_id', uid)
@@ -3070,20 +3103,74 @@ async function initAuth() {
   }
 }
 
+let collabChannel = null   // Realtime 채널 (collab 모드 전용)
+let collabShareId = null   // 현재 collab share_id
+
+// collab 모드에서 로컬 저장할 때마다 Supabase shared_trips도 업데이트
+async function pushCollabData() {
+  if (!collabShareId || !supa) return
+  const trip = DB.getTrip(state.tripId)
+  if (!trip) return
+  await supa.from('shared_trips').update({ trip_data: trip }).eq('share_id', collabShareId)
+}
+
 async function initShareView() {
   const params = new URLSearchParams(location.search)
   const shareId = params.get('share')
   if (!shareId || !supa) return false
   try {
-    const { data, error } = await supa.from('shared_trips').select('trip_data').eq('share_id', shareId).maybeSingle()
+    const { data, error } = await supa.from('shared_trips').select('trip_data, mode').eq('share_id', shareId).maybeSingle()
     if (error || !data) {
       alert('공유 링크를 찾을 수 없거나 만료되었어요.')
       return false
     }
-    state.shareMode = true
+    const isCollab = data.mode === 'collab'
+    state.shareMode = !isCollab   // collab이면 shareMode=false → 편집 UI 표시
     state.shareData = data.trip_data
     state.tripId = data.trip_data.id
     state.page = 'p2'
+
+    if (isCollab) {
+      collabShareId = shareId
+      // collab 모드: localStorage에 trip 데이터 주입 (DB.trips가 읽을 수 있도록)
+      const existing = JSON.parse(localStorage.getItem('mt_trips') || '[]')
+      const idx = existing.findIndex(t => t.id === data.trip_data.id)
+      if (idx >= 0) existing[idx] = data.trip_data
+      else existing.unshift(data.trip_data)
+      localStorage.setItem('mt_trips', JSON.stringify(existing))
+
+      // Realtime 구독 — 다른 편집자가 변경하면 로컬도 갱신
+      collabChannel = supa.channel('collab:' + shareId)
+        .on('postgres_changes', {
+          event: 'UPDATE', schema: 'public', table: 'shared_trips',
+          filter: `share_id=eq.${shareId}`
+        }, payload => {
+          if (!payload.new || !payload.new.trip_data) return
+          const updated = payload.new.trip_data
+          const list = JSON.parse(localStorage.getItem('mt_trips') || '[]')
+          const i = list.findIndex(t => t.id === updated.id)
+          if (i >= 0) list[i] = updated
+          localStorage.setItem('mt_trips', JSON.stringify(list))
+          state.shareData = updated
+          renderPage()
+        })
+        .subscribe()
+
+      // collab 저장 훅 — DB.save 오버라이드
+      const origSave = DB.save.bind(DB)
+      DB.save = function(t) {
+        origSave(t)
+        pushCollabData()
+      }
+
+      // 상단 배지 표시
+      document.querySelector('.share-mode-badge')?.remove?.()
+      const badge = document.createElement('span')
+      badge.style.cssText = 'font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;padding:4px 8px;color:#000;background:#fffbe6'
+      badge.textContent = '✏️ 함께 편집 중'
+      document.querySelector('.nav div')?.prepend(badge)
+    }
+
     return true
   } catch (e) {
     console.error('공유 데이터 로드 실패:', e)
