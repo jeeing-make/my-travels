@@ -185,6 +185,11 @@ button{cursor:pointer}
 .daytotal span{font-weight:700;margin-left:4px}
 .pmemo{font-size:10px;color:#333;background:#f0f0f0;padding:5px 8px;font-style:italic;border:none;outline:none;width:100%;resize:none;display:block}
 .pmemo::placeholder{color:#ccc;font-style:italic}
+.pvoucher-row{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.pvoucher-add{width:22px;height:22px;border-radius:50%;border:1px solid #ddd;background:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#bbb;flex-shrink:0;padding:0;line-height:1}
+.pvoucher-add:hover{border-color:#888;color:#555}
+.pvoucher-link{width:22px;height:22px;border-radius:50%;border:1px solid #000;background:#000;font-size:11px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;flex-shrink:0;text-decoration:none;line-height:1}
+.pvoucher-link:hover{opacity:.7}
 .delbtn{font-size:8px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888}
 .delbtn:hover{border-color:#000;color:#000}
 .movebtn{font-size:8px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888;line-height:1.4}
@@ -2047,6 +2052,12 @@ function renderPlaces() {
       </div>
       <div class="phrs">${getHoursForDate(place, day.date)}${place.address ? ` · ${place.address}` : ''}</div>
       <div class="pcost" data-pid="${place.id}"></div>
+      <div class="pvoucher-row">
+        ${place.voucherUrl
+          ? `<a class="pvoucher-link" href="${place.voucherUrl}" target="_blank" title="바우처 열기">🔗</a>`
+          : `<button class="pvoucher-add" data-pid="${place.id}" title="바우처 링크 추가">🔗</button>`
+        }
+      </div>
       <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
 
     item.querySelector('.pmorebtn').onclick = () => {
@@ -2061,6 +2072,30 @@ function renderPlaces() {
     })
     item.querySelector('textarea').onchange = e => {
       DB.updatePlace(state.tripId, state.dayId, place.id, { memo: e.target.value })
+    }
+
+    // 바우처 링크 추가 버튼
+    const voucherAddBtn = item.querySelector('.pvoucher-add')
+    if (voucherAddBtn) {
+      voucherAddBtn.onclick = () => {
+        const url = prompt('바우처 링크를 입력해주세요\n(구글드라이브, 노션, 에어비앤비 등 어떤 링크든 가능해요)')
+        if (!url || !url.trim()) return
+        const trimmed = url.trim().startsWith('http') ? url.trim() : 'https://' + url.trim()
+        DB.updatePlace(state.tripId, state.dayId, place.id, { voucherUrl: trimmed })
+        renderPlaces()
+      }
+    }
+
+    // 바우처 링크 우클릭/롱프레스 → 삭제
+    const voucherLink = item.querySelector('.pvoucher-link')
+    if (voucherLink) {
+      voucherLink.addEventListener('contextmenu', e => {
+        e.preventDefault()
+        if (confirm('바우처 링크를 삭제할까요?')) {
+          DB.updatePlace(state.tripId, state.dayId, place.id, { voucherUrl: null })
+          renderPlaces()
+        }
+      })
     }
 
     // 금액/화폐 — 클릭하면 인라인 편집
