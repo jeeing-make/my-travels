@@ -1082,31 +1082,33 @@ function renderDayMinimap() {
   if (places.length < 2) { mapEl.style.display = 'none'; return }
 
   const MAPS_KEY = 'AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew'
-  const w = Math.min(window.innerWidth, 800)
+  const w = Math.min(window.innerWidth || 800, 800)
   const h = 180
 
-  // Static Map — 경로 polyline + 번호 마커
   const markerParams = places.map((p, i) =>
     `markers=color:black%7Clabel:${i + 1}%7C${p.lat},${p.lng}`
   ).join('&')
-
-  // 경로 path (순서대로 연결)
   const pathCoords = places.map(p => `${p.lat},${p.lng}`).join('%7C')
   const pathParam = `path=color:0x000000ff%7Cweight:2%7C${pathCoords}`
-
   const staticUrl = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=2&${markerParams}&${pathParam}&key=${MAPS_KEY}`
 
-  imgEl.src = staticUrl
-  imgEl.onerror = () => { mapEl.style.display = 'none' }
-  mapEl.style.display = 'block'
+  // 동일 URL이면 재설정 안 함 (깜빡임 방지)
+  if (imgEl.src === staticUrl) return
 
-  // 클릭 시 구글맵 경로 열기 (waypoints)
+  mapEl.style.display = 'block'
+  imgEl.src = staticUrl
+  imgEl.onerror = () => {
+    imgEl.onerror = null  // 무한루프 방지
+    mapEl.style.display = 'none'
+  }
+
+  // 클릭 시 구글맵 경로 열기
   mapEl.onclick = () => {
     if (places.length < 2) return
     const origin = `${places[0].lat},${places[0].lng}`
-    const destination = `${places[places.length-1].lat},${places[places.length-1].lng}`
-    const waypoints = places.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('%7C')
-    const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}${waypoints ? '&waypoints=' + waypoints : ''}&travelmode=walking`
+    const dest = `${places[places.length-1].lat},${places[places.length-1].lng}`
+    const wps = places.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('%7C')
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}${wps ? '&waypoints=' + wps : ''}&travelmode=walking`
     window.open(url, '_blank')
   }
 }
@@ -2190,7 +2192,6 @@ function renderPlaces() {
   }
 
   updateDayTotal()
-  renderDayMinimap()
 
   // 장소 변경 시 국기 재조회 (백그라운드, countryFlag 초기화 후 재계산)
   const trip3 = DB.getTrip(state.tripId)
@@ -2383,6 +2384,7 @@ async function savePlaceByCoords(coords) {
 
   DB.addPlace(state.tripId, state.dayId, place)
   renderPlaces()
+  renderDayMinimap()
 }
 
 async function savePlace(nameOrId, coords) {
@@ -2426,6 +2428,7 @@ async function savePlace(nameOrId, coords) {
   }
   DB.addPlace(state.tripId, state.dayId, place)
   renderPlaces()
+  renderDayMinimap()
 }
 
 
