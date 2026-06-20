@@ -1579,9 +1579,13 @@ function renderHotelMarker(hotel, label) {
 // 현재 Day의 장소별 비용을 KRW로 환산해 합산 표시
 // 장소 카드의 금액/화폐 영역 렌더 (클릭 → 인라인 편집)
 function renderPCost(el, place, day) {
-  const cur = place.currency || defaultCurrencyForCountry(day.countryCode)
+  // cur은 렌더 시점마다 최신 place.currency를 읽어야 함 (고정하면 변경 후에도 이전 값 사용)
+  function getCur() {
+    return place.currency || defaultCurrencyForCountry(day.countryCode)
+  }
 
   function renderDisplay() {
+    const cur = getCur()
     if (!place.cost) {
       el.innerHTML = `<span class="pcost-add">💰 금액 추가</span>`
       el.querySelector('.pcost-add').onclick = renderEdit
@@ -1601,6 +1605,7 @@ function renderPCost(el, place, day) {
   }
 
   function renderEdit() {
+    const cur = getCur()
     el.innerHTML = `
       <select class="pcost-cur">${CURRENCY_LIST.map(c => `<option value="${c}" ${(cur === c) ? 'selected' : ''}>${c}</option>`).join('')}</select>
       <input type="number" class="pcost-amt" placeholder="금액" value="${place.cost || ''}" min="0" step="any"/>
@@ -1611,7 +1616,7 @@ function renderPCost(el, place, day) {
     function commit() {
       const amt = parseFloat(amtInp.value) || null
       place.cost = amt
-      place.currency = curSel.value
+      place.currency = curSel.value  // 최신 선택값 저장
       DB.updatePlace(state.tripId, state.dayId, place.id, { cost: amt, currency: curSel.value })
       renderDisplay()
       updateDayTotal()
