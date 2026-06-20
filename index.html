@@ -2052,13 +2052,13 @@ function renderPlaces() {
       </div>
       <div class="phrs">${getHoursForDate(place, day.date)}${place.address ? ` · ${place.address}` : ''}</div>
       <div class="pcost" data-pid="${place.id}"></div>
-      <div class="pvoucher-row">
+      <div style="display:flex;align-items:flex-start;gap:6px">
         ${place.voucherUrl
           ? `<a class="pvoucher-link" href="${place.voucherUrl}" target="_blank" title="바우처 열기">🔗</a>`
           : `<button class="pvoucher-add" data-pid="${place.id}" title="바우처 링크 추가">🔗</button>`
         }
-      </div>
-      <textarea class="pmemo" rows="2" placeholder="메모 추가…">${place.memo || ''}</textarea>`
+        <textarea class="pmemo" rows="2" placeholder="메모 추가…" style="flex:1">${place.memo || ''}</textarea>
+      </div>`
 
     item.querySelector('.pmorebtn').onclick = () => {
       openPlaceMoreModal(place, day)
