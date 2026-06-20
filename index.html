@@ -1248,30 +1248,11 @@ function renderP2Flights(trip) {
   const flights = trip.flights || []
 
   flights.forEach(flight => {
+    // resolved 상태는 서브토글에서 보여주니까 편집 중인 것만 렌더
+    if (!flight._editing) return
+
     const row = document.createElement('div')
     row.className = 'hotel-row'
-
-    const isResolved = !!(flight.depName && flight.arrName && !flight._editing)
-
-    if (isResolved) {
-      row.innerHTML = `
-        <div class="hotel-summary" style="flex-direction:column;align-items:stretch;gap:0;padding:0;border:.5px solid #ddd">
-        </div>`
-      const summaryDiv = row.querySelector('.hotel-summary')
-      summaryDiv.appendChild(renderFlightCard(flight))
-      const ctrl = document.createElement('div')
-      ctrl.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;padding:8px 10px'
-      ctrl.innerHTML = `<button type="button" class="hotel-edit">수정</button><button type="button" class="hotel-del">제거</button>`
-      summaryDiv.appendChild(ctrl)
-      row.querySelector('.hotel-edit').onclick = () => {
-        const list = DB.trips
-        const t = list.find(x => x.id === trip.id)
-        const f = t.flights.find(x => x.id === flight.id)
-        if (f) f._editing = true
-        DB.save(list)
-        renderP2()
-      }
-    } else {
       const mode = flight.mode || 'flight'
       const fromLabel = mode === 'flight' ? '출발 공항' : '출발지'
       const toLabel   = mode === 'flight' ? '도착 공항' : '도착지'
@@ -1360,7 +1341,6 @@ function renderP2Flights(trip) {
         syncFlightToPlaces(trip.id, flight.id)
         renderP2(); renderP3IfActive()
       }
-    }
 
     row.querySelector('.hotel-del').onclick = () => {
       const list = DB.trips
@@ -1570,7 +1550,38 @@ function renderFlightModeGroups(trip) {
         <div style="flex:1;min-width:0">
           <div style="font-size:11px;font-weight:700;color:#000">${dep} → ${arr}</div>
           <div style="font-size:9px;color:#aaa">${f.depDate || ''}${depTime}${arrDateStr}${arrTime}</div>
-        </div>`
+        </div>
+        <button class="fgrp-edit" style="font-size:9px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:3px 8px;color:#888;cursor:pointer">수정</button>
+        <button class="fgrp-del" style="font-size:9px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:3px 8px;color:#c00;cursor:pointer">제거</button>`
+
+      row.querySelector('.fgrp-edit').onclick = () => {
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        const fl = t.flights.find(x => x.id === f.id)
+        if (fl) fl._editing = true
+        DB.save(list)
+        // 교통편 섹션 펼치기
+        const body = document.getElementById('flight-section-body')
+        if (body && body.style.display === 'none') {
+          body.style.display = 'flex'
+          body.style.flexDirection = 'column'
+          document.getElementById('flight-section-toggle').textContent = '[ 🚐 교통편 ▴ ]'
+        }
+        renderP2()
+      }
+      row.querySelector('.fgrp-del').onclick = () => {
+        if (!confirm(`${dep} → ${arr} 교통편을 삭제할까요?`)) return
+        const list = DB.trips
+        const t = list.find(x => x.id === trip.id)
+        const fl = t.flights.find(x => x.id === f.id)
+        if (fl && fl.placeRef) {
+          const d = (t.days || []).find(x => x.id === fl.placeRef.dayId)
+          if (d) d.places = (d.places || []).filter(p => p.id !== fl.placeRef.placeId)
+        }
+        t.flights = t.flights.filter(x => x.id !== f.id)
+        DB.save(list)
+        renderP2(); renderP3IfActive()
+      }
       body.appendChild(row)
     })
 
