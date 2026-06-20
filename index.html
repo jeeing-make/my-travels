@@ -356,16 +356,12 @@ button{cursor:pointer}
   </div>
   <div class="hotel-section">
     <div class="hotel-section-title" id="flight-section-toggle" style="cursor:pointer">[ 🚐 교통편 ▾ ]</div>
-    <div id="flight-section-body" style="display:none">
+    <div id="flight-section-body" style="display:none;flex-direction:column;gap:8px">
       <div class="hotel-section-hint">출발/도착 공항과 날짜·시간을 입력하면 해당 날짜 일정에 표시됩니다.</div>
+      <!-- 종류별 서브토글 영역 -->
+      <div id="flight-mode-groups"></div>
       <div class="hotel-list" id="p2-flight-list"></div>
       <button type="button" class="hotel-add" id="p2-flight-add">+ 교통편 추가</button>
-    </div>
-  </div>
-  <div class="hotel-section">
-    <div class="hotel-section-title" id="transport-summary-toggle" style="cursor:pointer">[ 🗺️ 이동 요약 ▾ ]</div>
-    <div id="transport-summary-body" style="display:none">
-      <div id="transport-summary-list"></div>
     </div>
   </div>
   <div class="rlist" id="p2-list"></div>
@@ -921,10 +917,30 @@ function renderP2() {
   ;(trip.days || []).forEach((day, i) => {
     const row = document.createElement('div')
     row.className = 'rrow'
+    // 교통편 place에 출발/도착 국기 매핑 (flights에서 참조)
+    const flightFlagMap = {}
+    ;(trip.flights || []).forEach(f => {
+      if (f.placeRef) {
+        const depFlag = f.depLat != null ? '' : ''  // 좌표로 나라 캐시 없으면 빈값
+        flightFlagMap[f.placeRef.placeId] = {
+          dep: f._depFlag || '',
+          arr: f._arrFlag || '',
+          icon: TRANSPORT_ICON[f.mode || 'flight'] || '🚐'
+        }
+      }
+    })
+
     const stopsHtml = (day.places || []).length
       ? (day.places || []).map(p => {
           if (p.category === 'transport') {
-            return `<span class="rstop">${TRANSPORT_ICON[p.transportMode] || '🚐'}</span><span class="rarr">→</span>`
+            const fm = flightFlagMap[p.id]
+            const icon = TRANSPORT_ICON[p.transportMode] || '🚐'
+            const depFlag = fm?.dep || ''
+            const arrFlag = fm?.arr || ''
+            const display = depFlag || arrFlag
+              ? `${depFlag}${icon}${arrFlag}`
+              : icon
+            return `<span class="rstop">${display}</span><span class="rarr">→</span>`
           }
           return `<span class="rstop">${CAT[p.category]?.e || '📍'} ${p.name}</span><span class="rarr">→</span>`
         }).join('').replace(/<span class="rarr">→<\/span>$/, '')
@@ -1226,6 +1242,7 @@ function renderP3IfActive() {
 
 /* ── 2페이지 항공편 관리 ── */
 function renderP2Flights(trip) {
+  renderFlightModeGroups(trip)
   const wrap = document.getElementById('p2-flight-list')
   wrap.innerHTML = ''
   const flights = trip.flights || []
@@ -1452,6 +1469,12 @@ async function resolveFlightAirport(tripId, flightId, which) {
             const country = result.address_components.find(c => c.types.includes('country'))
             if (city && country) displayName = `${city.long_name}, ${country.long_name}`
             else if (country) displayName = country.long_name
+            // 국기 이모지 저장 (날짜 행 표시용)
+            if (country) {
+              const flag = countryCodeToFlag(country.short_name)
+              if (which === 'dep') flight._depFlag = flag
+              else flight._arrFlag = flag
+            }
           }
         } catch (e) { console.warn('영문 지명 조회 실패:', e) }
       }
@@ -1506,54 +1529,61 @@ document.getElementById('flight-section-toggle')?.addEventListener('click', () =
   toggle.textContent = open ? '[ 🚐 교통편 ▾ ]' : '[ 🚐 교통편 ▴ ]'
 })
 
-document.getElementById('transport-summary-toggle')?.addEventListener('click', () => {
-  const body = document.getElementById('transport-summary-body')
-  const toggle = document.getElementById('transport-summary-toggle')
-  const open = body.style.display !== 'none'
-  body.style.display = open ? 'none' : 'block'
-  toggle.textContent = open ? '[ 🗺️ 이동 요약 ▾ ]' : '[ 🗺️ 이동 요약 ▴ ]'
-  if (!open) renderTransportSummary()
-})
+document.getElementById('transport-summary-toggle')?.addEventListener('click', () => {})
 
-function renderTransportSummary() {
-  const trip = DB.getTrip(state.tripId)
-  if (!trip) return
-  const el = document.getElementById('transport-summary-list')
+function renderTransportSummary() {}  // 구버전 호환용 빈 함수
+
+function renderFlightModeGroups(trip) {
+  const el = document.getElementById('flight-mode-groups')
   if (!el) return
   const flights = trip.flights || []
-  if (!flights.length) {
-    el.innerHTML = '<div style="font-size:10px;color:#aaa;padding:4px 0">등록된 교통편이 없어요.</div>'
-    return
-  }
-  // 교통수단 종류별로 그룹화
+  el.innerHTML = ''
+  if (!flights.length) return
+
   const groups = {}
-  flights.forEach(f => {
-    const mode = f.mode || 'flight'
-    if (!groups[mode]) groups[mode] = []
-    groups[mode].push(f)
-  })
+  flights.forEach(f => { const m = f.mode || 'flight'; if (!groups[m]) groups[m] = []; groups[m].push(f) })
   const modeOrder = ['flight','train','bus','car']
-  el.innerHTML = modeOrder.filter(m => groups[m]).map(mode => {
+  const modeLabel = { flight:'비행기', train:'기차', bus:'버스', car:'자동차' }
+
+  modeOrder.filter(m => groups[m]).forEach(mode => {
     const icon = TRANSPORT_ICON[mode] || '🚐'
-    const label = { flight: '비행기', train: '기차', bus: '버스', car: '자동차' }[mode] || mode
-    const items = groups[mode].map(f => {
-      const dep = f.depCity ? f.depCity.split(',')[0].trim() : (f.depName || '출발')
-      const arr = f.arrCity ? f.arrCity.split(',')[0].trim() : (f.arrName || '도착')
-      const date = f.depDate || ''
-      const time = f.depTime ? ' ' + f.depTime : ''
-      return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:.5px solid #f0f0f0">
-        <span style="font-size:16px;flex-shrink:0">${icon}</span>
+    const label = modeLabel[mode] || mode
+    const wrap = document.createElement('div')
+    wrap.style.cssText = 'border:.5px solid #e8e8e8;margin-bottom:4px'
+
+    const hdr = document.createElement('div')
+    hdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:8px 12px;cursor:pointer;background:#f8f8f8;user-select:none'
+    hdr.innerHTML = `<span style="font-size:14px">${icon}</span><span style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#555;font-weight:700">${label}</span><span style="font-size:10px;color:#bbb;margin-left:4px">(${groups[mode].length})</span><span class="grp-arr" style="margin-left:auto;font-size:9px;color:#aaa">▾</span>`
+
+    const body = document.createElement('div')
+    body.style.display = 'none'
+
+    groups[mode].forEach(f => {
+      const dep = f.depCity ? f.depCity.split(',')[0].trim() : shortPlaceName(f.depName || '출발')
+      const arr = f.arrCity ? f.arrCity.split(',')[0].trim() : shortPlaceName(f.arrName || '도착')
+      const depTime = f.depTime ? ' · ' + f.depTime : ''
+      const arrTime = f.arrTime ? ' · ' + f.arrTime : ''
+      const arrDateStr = f.arrDate && f.arrDate !== f.depDate ? ` → ${f.arrDate}` : ''
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:.5px solid #f0f0f0'
+      row.innerHTML = `
         <div style="flex:1;min-width:0">
           <div style="font-size:11px;font-weight:700;color:#000">${dep} → ${arr}</div>
-          <div style="font-size:9px;color:#aaa">${date}${time}</div>
-        </div>
-      </div>`
-    }).join('')
-    return `<div style="margin-bottom:8px">
-      <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;padding:6px 0 2px;border-bottom:.5px solid #ddd">${icon} ${label}</div>
-      ${items}
-    </div>`
-  }).join('')
+          <div style="font-size:9px;color:#aaa">${f.depDate || ''}${depTime}${arrDateStr}${arrTime}</div>
+        </div>`
+      body.appendChild(row)
+    })
+
+    hdr.addEventListener('click', () => {
+      const open = body.style.display !== 'none'
+      body.style.display = open ? 'none' : 'block'
+      hdr.querySelector('.grp-arr').textContent = open ? '▾' : '▴'
+    })
+
+    wrap.appendChild(hdr)
+    wrap.appendChild(body)
+    el.appendChild(wrap)
+  })
 }
 
 document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
@@ -1858,11 +1888,11 @@ function renderPlaces() {
   let places = day2_.places || []
 
   // 일정 시작 — 전날 묵었던 숙소 → 첫 장소
-  // 날짜+방향별 키(dirS_날짜)로 저장해 다른 날짜/방향과 충돌 방지
+  // 날짜+방향+연결장소ID 키로 저장 → 장소 순서 변경 시 자동 재계산
   const hotelStart = getHotelForDate(trip, day.date, 'start')
   if (hotelStart && hotelStart.lat != null && places[0] && places[0].lat != null) {
     const first = places[0]
-    const sKey = 'dirS_' + day.date
+    const sKey = 'dirS_' + day.date + '_' + first.id
     const startDirInfo = { dirMode: hotelStart[sKey+'_m'], dirDuration: hotelStart[sKey+'_d'], dirDistance: hotelStart[sKey+'_x'] }
     const bar = createDirBar(hotelStart, first, startDirInfo, dir => {
       const list2 = DB.trips
@@ -2009,7 +2039,7 @@ function renderPlaces() {
   const hotelEnd = getHotelForDate(trip, day.date, 'end')
   if (hotelEnd && hotelEnd.lat != null && places.length > 0 && places[places.length - 1].lat != null) {
     const last = places[places.length - 1]
-    const eKey = 'dirE_' + day.date
+    const eKey = 'dirE_' + day.date + '_' + last.id
     const endDirInfo = { dirMode: hotelEnd[eKey+'_m'], dirDuration: hotelEnd[eKey+'_d'], dirDistance: hotelEnd[eKey+'_x'] }
     const bar = createDirBar(last, hotelEnd, endDirInfo, dir => {
       const list2 = DB.trips
