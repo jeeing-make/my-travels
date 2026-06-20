@@ -395,9 +395,9 @@ button{cursor:pointer}
   </div>
   <div class="daytotal" id="day-total" style="display:none">[ 일자별 사용금액 ] <span id="day-total-val"></span></div>
   <div id="day-minimap-toggle" style="display:none;padding:10px 20px;border-bottom:.5px solid #ddd;cursor:pointer;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;user-select:none">[ 🗺 오늘의 루트 보기 ▾ ]</div>
-  <div id="day-minimap" style="display:none;position:relative;border-bottom:1px solid #000;cursor:pointer" title="구글맵에서 전체 경로 보기">
-    <img id="day-minimap-img" style="width:100%;height:200px;object-fit:cover;display:block"/>
-    <div style="position:absolute;bottom:8px;right:10px;font-size:8px;letter-spacing:.1em;text-transform:uppercase;background:rgba(0,0,0,.6);color:#fff;padding:3px 8px">전체 경로 열기 →</div>
+  <div id="day-minimap" style="display:none;position:relative;border-bottom:1px solid #000">
+    <div id="day-minimap-inner" style="width:100%;height:220px;position:relative;background:#f0f0f0;overflow:hidden"></div>
+    <div style="position:absolute;bottom:8px;right:10px;font-size:8px;letter-spacing:.1em;text-transform:uppercase;background:rgba(0,0,0,.7);color:#fff;padding:4px 10px;cursor:pointer" id="day-minimap-open">전체 경로 열기 →</div>
   </div>
   <div class="places" id="p3-places"></div>
   <div class="add-place">
@@ -1041,10 +1041,10 @@ function renderP3() {
   // 날짜가 바뀌면 미니맵 토글 상태 초기화
   const toggleEl = document.getElementById('day-minimap-toggle')
   const mapEl = document.getElementById('day-minimap')
-  const imgEl = document.getElementById('day-minimap-img')
   if (toggleEl) { delete toggleEl.dataset.bound; toggleEl.textContent = '[ 🗺 오늘의 루트 보기 ▾ ]' }
   if (mapEl) mapEl.style.display = 'none'
-  if (imgEl) { imgEl.src = ''; imgEl.dataset.loadedUrl = '' }
+  const innerEl = document.getElementById('day-minimap-inner')
+  if (innerEl) { innerEl.innerHTML = ''; innerEl.dataset.mapKey = '' }
 
   const MON = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
   const dateObj = day.date ? new Date(day.date) : null
@@ -1101,7 +1101,6 @@ function renderDayMinimap() {
 
   toggleEl.style.display = 'block'
 
-  // onclick 중복 등록 방지 — data 속성으로 표시
   if (!toggleEl.dataset.bound) {
     toggleEl.dataset.bound = '1'
     toggleEl.addEventListener('click', () => {
@@ -1115,29 +1114,33 @@ function renderDayMinimap() {
         loadMinimapImage()
       }
     })
-
-    mapEl.addEventListener('click', () => {
-      const t = DB.getTrip(state.tripId)
-      const d = (t?.days || []).find(x => x.id === state.dayId)
-      if (!d) return
-      const ps = (d.places || []).filter(p => p.category !== 'transport' && p.lat != null)
-      if (ps.length < 2) return
-      const origin = `${ps[0].lat},${ps[0].lng}`
-      const dest = `${ps[ps.length-1].lat},${ps[ps.length-1].lng}`
-      const wps = ps.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('%7C')
-      window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}${wps ? '&waypoints=' + wps : ''}&travelmode=walking`, '_blank')
+    document.getElementById('day-minimap-open')?.addEventListener('click', e => {
+      e.stopPropagation()
+      openMinimapRoute()
     })
   }
 
-  // 이미 열려있으면 새 장소 반영해서 갱신
   if (mapEl.style.display !== 'none') loadMinimapImage()
 }
 
+function openMinimapRoute() {
+  const trip = DB.getTrip(state.tripId)
+  const day = (trip?.days || []).find(d => d.id === state.dayId)
+  if (!day) return
+  const ps = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
+  if (ps.length < 2) return
+  const origin = `${ps[0].lat},${ps[0].lng}`
+  const dest = `${ps[ps.length-1].lat},${ps[ps.length-1].lng}`
+  const wps = ps.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('%7C')
+  window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}${wps ? '&waypoints=' + wps : ''}&travelmode=walking`, '_blank')
+}
+
 function loadMinimapImage() {
-  const imgEl = document.getElementById('day-minimap-img')
-  const mapEl = document.getElementById('day-minimap')
-  const toggleEl = document.getElementById('day-minimap-toggle')
-  if (!imgEl) return
+  const inner = document.getElementById('day-minimap-inner')
+  if (!inner) return
+
+  // Google Maps JS API 사용
+  if (typeof google === 'undefined' || !google.maps) return
 
   const trip = DB.getTrip(state.tripId)
   const day = (trip?.days || []).find(d => d.id === state.dayId)
@@ -1145,24 +1148,68 @@ function loadMinimapImage() {
   const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
   if (places.length < 2) return
 
-  const MAPS_KEY = 'AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew'
-  const w = Math.min(window.innerWidth || 800, 800)
-  const h = 200
-  const markerParams = places.map((p, i) =>
-    `markers=color:black%7Clabel:${i+1}%7C${p.lat},${p.lng}`
-  ).join('&')
-  const pathParam = `path=color:0x000000ff%7Cweight:2%7C${places.map(p => `${p.lat},${p.lng}`).join('%7C')}`
-  const url = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=2&${markerParams}&${pathParam}&key=${MAPS_KEY}`
+  // 이미 지도 인스턴스가 있으면 재사용
+  const existingKey = inner.dataset.mapKey
+  const newKey = places.map(p => `${p.lat},${p.lng}`).join('|')
+  if (existingKey === newKey) return
+  inner.dataset.mapKey = newKey
+  inner.innerHTML = ''  // 이전 맵 제거
 
-  if (imgEl.dataset.loadedUrl === url) return
-  imgEl.dataset.loadedUrl = ''
-  imgEl.src = url
-  imgEl.onload = () => { imgEl.dataset.loadedUrl = url }
-  imgEl.onerror = () => {
-    imgEl.onerror = null
-    if (mapEl) mapEl.style.display = 'none'
-    if (toggleEl) toggleEl.textContent = '[ 🗺 오늘의 루트 보기 ▾ ]'
-  }
+  // 중심 좌표 계산
+  const avgLat = places.reduce((s, p) => s + p.lat, 0) / places.length
+  const avgLng = places.reduce((s, p) => s + p.lng, 0) / places.length
+
+  const map = new google.maps.Map(inner, {
+    center: { lat: avgLat, lng: avgLng },
+    zoom: 13,
+    disableDefaultUI: true,
+    gestureHandling: 'none',
+    styles: [
+      { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+      { featureType: 'transit', stylers: [{ visibility: 'off' }] }
+    ]
+  })
+
+  // 번호 마커
+  places.forEach((p, i) => {
+    new google.maps.Marker({
+      position: { lat: p.lat, lng: p.lng },
+      map,
+      label: {
+        text: String(i + 1),
+        color: '#fff',
+        fontSize: '11px',
+        fontWeight: '700'
+      },
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 12,
+        fillColor: i === 0 ? '#000' : i === places.length - 1 ? '#000' : '#555',
+        fillOpacity: 1,
+        strokeColor: '#fff',
+        strokeWeight: 2
+      }
+    })
+  })
+
+  // 경로 선
+  new google.maps.Polyline({
+    path: places.map(p => ({ lat: p.lat, lng: p.lng })),
+    map,
+    strokeColor: '#000',
+    strokeOpacity: 0.8,
+    strokeWeight: 2,
+    icons: [{
+      icon: { path: google.maps.SymbolPath.FORWARD_OPEN_ARROW, scale: 3 },
+      offset: '100%',
+      repeat: '80px'
+    }]
+  })
+
+  // 자동 bounds 맞추기
+  const bounds = new google.maps.LatLngBounds()
+  places.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng }))
+  map.fitBounds(bounds, { top: 20, bottom: 20, left: 20, right: 20 })
 }
 
 /* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만) ── */
