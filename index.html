@@ -362,6 +362,12 @@ button{cursor:pointer}
       <button type="button" class="hotel-add" id="p2-flight-add">+ 교통편 추가</button>
     </div>
   </div>
+  <div class="hotel-section">
+    <div class="hotel-section-title" id="transport-summary-toggle" style="cursor:pointer">[ 🗺️ 이동 요약 ▾ ]</div>
+    <div id="transport-summary-body" style="display:none">
+      <div id="transport-summary-list"></div>
+    </div>
+  </div>
   <div class="rlist" id="p2-list"></div>
 </div>
 
@@ -885,6 +891,10 @@ function renderP2() {
   renderP2Hotels(trip)
   renderP2Flights(trip)
 
+  // 이동 요약 토글이 열려있으면 같이 갱신
+  const summaryBody = document.getElementById('transport-summary-body')
+  if (summaryBody && summaryBody.style.display !== 'none') renderTransportSummary()
+
   // Hotels/Flights 렌더 중 DB.save가 호출될 수 있으므로 최신 데이터 다시 읽기
   trip = DB.getTrip(state.tripId)
   if (!trip) return
@@ -912,7 +922,12 @@ function renderP2() {
     const row = document.createElement('div')
     row.className = 'rrow'
     const stopsHtml = (day.places || []).length
-      ? (day.places || []).map(p => `<span class="rstop">${CAT[p.category]?.e || '📍'} ${p.name}</span><span class="rarr">→</span>`).join('').replace(/<span class="rarr">→<\/span>$/, '')
+      ? (day.places || []).map(p => {
+          if (p.category === 'transport') {
+            return `<span class="rstop">${TRANSPORT_ICON[p.transportMode] || '🚐'}</span><span class="rarr">→</span>`
+          }
+          return `<span class="rstop">${CAT[p.category]?.e || '📍'} ${p.name}</span><span class="rarr">→</span>`
+        }).join('').replace(/<span class="rarr">→<\/span>$/, '')
       : '<span style="font-size:9px;color:#ccc;letter-spacing:.08em;text-transform:uppercase">장소 없음</span>'
 
     // 날짜별 국가 이모지 — 캐시된 값 사용, 없으면 비동기로 조회 후 갱신
@@ -1241,48 +1256,40 @@ function renderP2Flights(trip) {
       }
     } else {
       const mode = flight.mode || 'flight'
-      const modeLabel = { flight: '✈️ 비행기', train: '🚄 기차', car: '🚗 자동차' }
       const fromLabel = mode === 'flight' ? '출발 공항' : '출발지'
-      const toLabel = mode === 'flight' ? '도착 공항' : '도착지'
+      const toLabel   = mode === 'flight' ? '도착 공항' : '도착지'
       row.innerHTML = `
         <div class="hotel-row-top">
           <div class="transport-mode-pick" style="flex:1">
-            <button type="button" class="tmode-btn ${mode === 'flight' ? 'active' : ''}" data-mode="flight">✈️ 비행기</button>
-            <button type="button" class="tmode-btn ${mode === 'train' ? 'active' : ''}" data-mode="train">🚄 기차</button>
-            <button type="button" class="tmode-btn ${mode === 'bus' ? 'active' : ''}" data-mode="bus">🚌 버스</button>
-            <button type="button" class="tmode-btn ${mode === 'car' ? 'active' : ''}" data-mode="car">🚗 자동차</button>
+            <button type="button" class="tmode-btn ${mode==='flight'?'active':''}" data-mode="flight">✈️</button>
+            <button type="button" class="tmode-btn ${mode==='train'?'active':''}" data-mode="train">🚄</button>
+            <button type="button" class="tmode-btn ${mode==='bus'?'active':''}" data-mode="bus">🚌</button>
+            <button type="button" class="tmode-btn ${mode==='car'?'active':''}" data-mode="car">🚗</button>
           </div>
           <button type="button" class="hotel-del">제거</button>
         </div>
-        <div class="hotel-row-top">
-          <span style="font-size:11px;font-weight:700">🛫 출발</span>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-size:9px;color:#888;letter-spacing:.08em">🛫 출발</span>
+            <input type="text" class="f-dep-name" placeholder="${fromLabel}" value="${flight.depInput || ''}"/>
+            <input type="text" class="f-dep-city" placeholder="도시명 (자동)" value="${flight.depCity || ''}"/>
+            <div style="display:flex;gap:4px">
+              <select class="f-dep-date" style="flex:1;font-size:10px;border:.5px solid #ddd;padding:5px 4px">${dateOptionsHtml(trip, flight.depDate)}</select>
+              <input type="time" class="f-dep-time" value="${flight.depTime || ''}" style="width:80px;font-size:10px;border:.5px solid #ddd;padding:5px 4px"/>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-size:9px;color:#888;letter-spacing:.08em">🛬 도착</span>
+            <input type="text" class="f-arr-name" placeholder="${toLabel}" value="${flight.arrInput || ''}"/>
+            <input type="text" class="f-arr-city" placeholder="도시명 (자동)" value="${flight.arrCity || ''}"/>
+            <div style="display:flex;gap:4px">
+              <select class="f-arr-date" style="flex:1;font-size:10px;border:.5px solid #ddd;padding:5px 4px">${dateOptionsHtml(trip, flight.arrDate)}</select>
+              <input type="time" class="f-arr-time" value="${flight.arrTime || ''}" style="width:80px;font-size:10px;border:.5px solid #ddd;padding:5px 4px"/>
+            </div>
+          </div>
         </div>
-        <div class="hotel-row-top">
-          <input type="text" class="f-dep-name" placeholder="${fromLabel} (예: 인천국제공항)" value="${flight.depInput || ''}"/>
-        </div>
-        <div class="hotel-row-top">
-          <input type="text" class="f-dep-city" placeholder="표시될 도시명 (예: Seoul) — 비워두면 자동검색" value="${flight.depCity || ''}"/>
-        </div>
-        <div class="hotel-dates">
-          <select class="f-dep-date">${dateOptionsHtml(trip, flight.depDate)}</select>
-          <input type="time" class="f-dep-time" value="${flight.depTime || ''}"/>
-        </div>
-        <div class="hotel-row-top" style="margin-top:6px">
-          <span style="font-size:11px;font-weight:700">🛬 도착</span>
-        </div>
-        <div class="hotel-row-top">
-          <input type="text" class="f-arr-name" placeholder="${toLabel} (예: 나리타국제공항)" value="${flight.arrInput || ''}"/>
-        </div>
-        <div class="hotel-row-top">
-          <input type="text" class="f-arr-city" placeholder="표시될 도시명 (예: Prague) — 비워두면 자동검색" value="${flight.arrCity || ''}"/>
-        </div>
-        <div class="hotel-dates">
-          <select class="f-arr-date">${dateOptionsHtml(trip, flight.arrDate)}</select>
-          <input type="time" class="f-arr-time" value="${flight.arrTime || ''}"/>
-        </div>
-        ${flight.depName ? `<div class="hotel-resolved">✓ 출발: ${flight.depName}</div>` : ''}
-        ${flight.arrName ? `<div class="hotel-resolved">✓ 도착: ${flight.arrName}</div>` : ''}
-        <button type="button" class="hotel-done">완료</button>`
+        ${flight.depName ? `<div class="hotel-resolved">✓ ${flight.depName} → ${flight.arrName || '?'}</div>` : ''}
+        <button type="button" class="hotel-done" style="margin-top:4px">완료</button>`
 
       row.querySelectorAll('.tmode-btn').forEach(b => {
         b.onclick = () => {
@@ -1498,6 +1505,56 @@ document.getElementById('flight-section-toggle')?.addEventListener('click', () =
   if (!open) body.style.flexDirection = 'column'
   toggle.textContent = open ? '[ 🚐 교통편 ▾ ]' : '[ 🚐 교통편 ▴ ]'
 })
+
+document.getElementById('transport-summary-toggle')?.addEventListener('click', () => {
+  const body = document.getElementById('transport-summary-body')
+  const toggle = document.getElementById('transport-summary-toggle')
+  const open = body.style.display !== 'none'
+  body.style.display = open ? 'none' : 'block'
+  toggle.textContent = open ? '[ 🗺️ 이동 요약 ▾ ]' : '[ 🗺️ 이동 요약 ▴ ]'
+  if (!open) renderTransportSummary()
+})
+
+function renderTransportSummary() {
+  const trip = DB.getTrip(state.tripId)
+  if (!trip) return
+  const el = document.getElementById('transport-summary-list')
+  if (!el) return
+  const flights = trip.flights || []
+  if (!flights.length) {
+    el.innerHTML = '<div style="font-size:10px;color:#aaa;padding:4px 0">등록된 교통편이 없어요.</div>'
+    return
+  }
+  // 교통수단 종류별로 그룹화
+  const groups = {}
+  flights.forEach(f => {
+    const mode = f.mode || 'flight'
+    if (!groups[mode]) groups[mode] = []
+    groups[mode].push(f)
+  })
+  const modeOrder = ['flight','train','bus','car']
+  el.innerHTML = modeOrder.filter(m => groups[m]).map(mode => {
+    const icon = TRANSPORT_ICON[mode] || '🚐'
+    const label = { flight: '비행기', train: '기차', bus: '버스', car: '자동차' }[mode] || mode
+    const items = groups[mode].map(f => {
+      const dep = f.depCity ? f.depCity.split(',')[0].trim() : (f.depName || '출발')
+      const arr = f.arrCity ? f.arrCity.split(',')[0].trim() : (f.arrName || '도착')
+      const date = f.depDate || ''
+      const time = f.depTime ? ' ' + f.depTime : ''
+      return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:.5px solid #f0f0f0">
+        <span style="font-size:16px;flex-shrink:0">${icon}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:700;color:#000">${dep} → ${arr}</div>
+          <div style="font-size:9px;color:#aaa">${date}${time}</div>
+        </div>
+      </div>`
+    }).join('')
+    return `<div style="margin-bottom:8px">
+      <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;padding:6px 0 2px;border-bottom:.5px solid #ddd">${icon} ${label}</div>
+      ${items}
+    </div>`
+  }).join('')
+}
 
 document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
   const trip = DB.getTrip(state.tripId)
