@@ -389,6 +389,10 @@ button{cursor:pointer}
       </div>
     </div>
   </div>
+  <div id="day-minimap" style="display:none;cursor:pointer;position:relative;border-bottom:1px solid #000" title="구글맵에서 전체 경로 보기">
+    <img id="day-minimap-img" style="width:100%;height:180px;object-fit:cover;display:block"/>
+    <div style="position:absolute;bottom:8px;right:10px;font-size:8px;letter-spacing:.1em;text-transform:uppercase;background:rgba(0,0,0,.6);color:#fff;padding:3px 8px">지도 열기 →</div>
+  </div>
   <div class="daytotal" id="day-total" style="display:none">[ 일자별 사용금액 ] <span id="day-total-val"></span></div>
   <div class="places" id="p3-places"></div>
   <div class="add-place">
@@ -1055,12 +1059,56 @@ function renderP3() {
   }
 
   renderPlaces()
+  renderDayMinimap()
   backfillPlaceIds(state.tripId, state.dayId)
 
   const btn = document.getElementById('place-btn')
   const inp = document.getElementById('place-in')
   btn.onclick = () => doAddPlace()
   inp.onkeydown = e => { if (e.key === 'Enter') doAddPlace() }
+}
+
+/* ── 하루 루트 미니맵 ── */
+function renderDayMinimap() {
+  const mapEl = document.getElementById('day-minimap')
+  const imgEl = document.getElementById('day-minimap-img')
+  if (!mapEl || !imgEl) return
+
+  const trip = DB.getTrip(state.tripId)
+  const day = (trip?.days || []).find(d => d.id === state.dayId)
+  if (!day) return
+
+  const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
+  if (places.length < 2) { mapEl.style.display = 'none'; return }
+
+  const MAPS_KEY = 'AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew'
+  const w = Math.min(window.innerWidth, 800)
+  const h = 180
+
+  // Static Map — 경로 polyline + 번호 마커
+  const markerParams = places.map((p, i) =>
+    `markers=color:black%7Clabel:${i + 1}%7C${p.lat},${p.lng}`
+  ).join('&')
+
+  // 경로 path (순서대로 연결)
+  const pathCoords = places.map(p => `${p.lat},${p.lng}`).join('%7C')
+  const pathParam = `path=color:0x000000ff%7Cweight:2%7C${pathCoords}`
+
+  const staticUrl = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=2&${markerParams}&${pathParam}&key=${MAPS_KEY}`
+
+  imgEl.src = staticUrl
+  imgEl.onerror = () => { mapEl.style.display = 'none' }
+  mapEl.style.display = 'block'
+
+  // 클릭 시 구글맵 경로 열기 (waypoints)
+  mapEl.onclick = () => {
+    if (places.length < 2) return
+    const origin = `${places[0].lat},${places[0].lng}`
+    const destination = `${places[places.length-1].lat},${places[places.length-1].lng}`
+    const waypoints = places.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('%7C')
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}${waypoints ? '&waypoints=' + waypoints : ''}&travelmode=walking`
+    window.open(url, '_blank')
+  }
 }
 
 /* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만) ── */
@@ -2142,6 +2190,7 @@ function renderPlaces() {
   }
 
   updateDayTotal()
+  renderDayMinimap()
 
   // 장소 변경 시 국기 재조회 (백그라운드, countryFlag 초기화 후 재계산)
   const trip3 = DB.getTrip(state.tripId)
