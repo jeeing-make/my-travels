@@ -939,7 +939,7 @@ function renderP2() {
             const depFlag = fm?.dep || ''
             const arrFlag = fm?.arr || ''
             const display = depFlag || arrFlag
-              ? `${depFlag}${icon}${arrFlag}`
+              ? `${depFlag} - ${icon} - ${arrFlag}`
               : icon
             return `<span class="rstop">${display}</span><span class="rarr">→</span>`
           }
