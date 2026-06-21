@@ -1104,10 +1104,12 @@ function renderDayMinimap() {
       if (isOpen) {
         mapEl.style.display = 'none'
         toggleEl.textContent = '[ 🗺 오늘의 루트 보기 ▾ ]'
+        // 닫을 때 캐시 초기화 → 재열기 시 최신 데이터 반영
+        const inner = document.getElementById('day-minimap-inner')
+        if (inner) { inner.dataset.mapKey = ''; inner.innerHTML = '' }
       } else {
         mapEl.style.display = 'block'
         toggleEl.textContent = '[ 🗺 오늘의 루트 닫기 ▴ ]'
-        // display:block 후 브라우저가 레이아웃 계산할 시간을 줌
         requestAnimationFrame(() => loadMinimapImage())
       }
     })
@@ -1152,15 +1154,22 @@ function loadMinimapImage() {
   const w = Math.min(window.innerWidth || 400, 640)
   const h = 220
 
-  // 번호 마커 (최대 9개, label은 A~I 또는 숫자)
+  // 번호 마커 — 검정 통일
   const markers = places.slice(0, 9).map((p, i) =>
-    `markers=size:mid%7Ccolor:black%7Clabel:${i+1}%7C${p.lat},${p.lng}`
+    `markers=size:mid%7Ccolor:0x000000%7Clabel:${i+1}%7C${p.lat},${p.lng}`
   ).join('&')
 
-  // 경로 선
-  const path = `path=color:0x000000CC%7Cweight:3%7C${places.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
+  // 경로선 — 검정 실선
+  const path = `path=color:0x000000DD%7Cweight:3%7C${places.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
 
-  const url = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=2&maptype=roadmap&${markers}&${path}&key=${KEY}`
+  // 지도 스타일 — POI 숨기고 깔끔하게
+  const style = [
+    'style=feature:poi%7Cvisibility:off',
+    'style=feature:transit%7Cvisibility:off',
+    'style=feature:road%7Celement:labels.icon%7Cvisibility:off'
+  ].join('&')
+
+  const url = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=2&maptype=roadmap&${markers}&${path}&${style}&key=${KEY}`
 
   const img = document.createElement('img')
   img.style.cssText = 'width:100%;height:220px;object-fit:cover;display:block'
@@ -2138,13 +2147,16 @@ function renderPlaces() {
       return
     }
 
+    // 교통편 제외한 장소 번호 (미니맵 마커와 동일)
+    const placeNum = places.slice(0, i).filter(p => p.category !== 'transport').length + (place.category !== 'transport' ? 1 : 0)
+
     const cat = CAT[place.category] || CAT.attraction
     const item = document.createElement('div')
     item.className = 'pitem'
     item.innerHTML = `
       <div class="ptop">
         <div class="pleft">
-          <div class="pcat">[ ${cat.e} ${cat.l} ]</div>
+          <div class="pcat">[ ${cat.e} ${cat.l} ] <span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#000;color:#fff;font-size:9px;font-weight:700;vertical-align:middle;margin-left:2px">${placeNum}</span></div>
           <div style="display:flex;align-items:center;gap:6px">
             <div class="pname" data-pid="${place.id}" style="cursor:text">${place.name}</div>
             ${place.lat != null ? (() => {
