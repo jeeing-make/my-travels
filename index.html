@@ -1140,78 +1140,34 @@ function loadMinimapImage() {
   const inner = document.getElementById('day-minimap-inner')
   if (!inner) return
 
-  // Google Maps JS API 사용
-  if (typeof google === 'undefined' || !google.maps) return
-
   const trip = DB.getTrip(state.tripId)
   const day = (trip?.days || []).find(d => d.id === state.dayId)
   if (!day) return
   const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
   if (places.length < 2) return
 
-  // 이미 지도 인스턴스가 있으면 재사용
-  const existingKey = inner.dataset.mapKey
-  const newKey = places.map(p => `${p.lat},${p.lng}`).join('|')
-  if (existingKey === newKey) return
+  const newKey = places.map(p => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`).join('|')
+  if (inner.dataset.mapKey === newKey) return
   inner.dataset.mapKey = newKey
-  inner.innerHTML = ''  // 이전 맵 제거
+  inner.innerHTML = ''
 
-  // 중심 좌표 계산
-  const avgLat = places.reduce((s, p) => s + p.lat, 0) / places.length
-  const avgLng = places.reduce((s, p) => s + p.lng, 0) / places.length
+  const MAPS_KEY = 'AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew'
 
-  const map = new google.maps.Map(inner, {
-    center: { lat: avgLat, lng: avgLng },
-    zoom: 13,
-    disableDefaultUI: true,
-    gestureHandling: 'none',
-    styles: [
-      { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-      { featureType: 'transit', stylers: [{ visibility: 'off' }] }
-    ]
-  })
+  // waypoints: 출발·도착 제외 중간 장소들
+  const origin = `${places[0].lat},${places[0].lng}`
+  const dest = `${places[places.length-1].lat},${places[places.length-1].lng}`
+  const wps = places.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('|')
 
-  // 번호 마커
-  places.forEach((p, i) => {
-    new google.maps.Marker({
-      position: { lat: p.lat, lng: p.lng },
-      map,
-      label: {
-        text: String(i + 1),
-        color: '#fff',
-        fontSize: '11px',
-        fontWeight: '700'
-      },
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        scale: 12,
-        fillColor: i === 0 ? '#000' : i === places.length - 1 ? '#000' : '#555',
-        fillOpacity: 1,
-        strokeColor: '#fff',
-        strokeWeight: 2
-      }
-    })
-  })
+  // Directions embed — 경로+마커 모두 표시
+  const embedUrl = `https://www.google.com/maps/embed/v1/directions?key=${MAPS_KEY}&origin=${origin}&destination=${dest}${wps ? '&waypoints=' + encodeURIComponent(wps) : ''}&mode=walking&language=ko`
 
-  // 경로 선
-  new google.maps.Polyline({
-    path: places.map(p => ({ lat: p.lat, lng: p.lng })),
-    map,
-    strokeColor: '#000',
-    strokeOpacity: 0.8,
-    strokeWeight: 2,
-    icons: [{
-      icon: { path: google.maps.SymbolPath.FORWARD_OPEN_ARROW, scale: 3 },
-      offset: '100%',
-      repeat: '80px'
-    }]
-  })
-
-  // resize 트리거 후 bounds 맞추기
-  const bounds = new google.maps.LatLngBounds()
-  places.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng }))
-  google.maps.event.trigger(map, 'resize')
-  map.fitBounds(bounds, { top: 30, bottom: 30, left: 30, right: 30 })
+  const iframe = document.createElement('iframe')
+  iframe.src = embedUrl
+  iframe.style.cssText = 'width:100%;height:220px;border:none;display:block'
+  iframe.loading = 'lazy'
+  iframe.allowFullscreen = false
+  inner.style.height = '220px'
+  inner.appendChild(iframe)
 }
 
 /* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만) ── */
