@@ -1111,7 +1111,8 @@ function renderDayMinimap() {
       } else {
         mapEl.style.display = 'block'
         toggleEl.textContent = '[ 🗺 오늘의 루트 닫기 ▴ ]'
-        loadMinimapImage()
+        // display:block 후 브라우저가 레이아웃 계산할 시간을 줌
+        requestAnimationFrame(() => loadMinimapImage())
       }
     })
     document.getElementById('day-minimap-open')?.addEventListener('click', e => {
@@ -1206,10 +1207,11 @@ function loadMinimapImage() {
     }]
   })
 
-  // 자동 bounds 맞추기
+  // resize 트리거 후 bounds 맞추기
   const bounds = new google.maps.LatLngBounds()
   places.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng }))
-  map.fitBounds(bounds, { top: 20, bottom: 20, left: 20, right: 20 })
+  google.maps.event.trigger(map, 'resize')
+  map.fitBounds(bounds, { top: 30, bottom: 30, left: 30, right: 30 })
 }
 
 /* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만) ── */
