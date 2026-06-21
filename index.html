@@ -1118,8 +1118,7 @@ function renderDayMinimap() {
       openMinimapRoute()
     })
   }
-
-  if (mapEl.style.display !== 'none') loadMinimapImage()
+  // 열려있어도 자동 재로드 안 함 — 사용자 토글 클릭 시에만 로드
 }
 
 function openMinimapRoute() {
@@ -1151,25 +1150,24 @@ function loadMinimapImage() {
   inner.style.cssText = 'width:100%;height:220px;display:block;background:#e8e8e8'
 
   const KEY = 'AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew'
-  const w = Math.min(window.innerWidth || 400, 640)
-  const h = 220
+  const w = Math.min(Math.round(window.innerWidth || 400), 600)
+  const h = 200
 
-  // 번호 마커 — 검정 통일
+  // 번호 마커 — 검정 통일, 최대 9개
   const markers = places.slice(0, 9).map((p, i) =>
     `markers=size:mid%7Ccolor:0x000000%7Clabel:${i+1}%7C${p.lat},${p.lng}`
   ).join('&')
 
-  // 경로선 — 검정 실선
+  // 경로선
   const path = `path=color:0x000000DD%7Cweight:3%7C${places.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
 
-  // 지도 스타일 — POI 숨기고 깔끔하게
+  // POI 숨기기
   const style = [
     'style=feature:poi%7Cvisibility:off',
-    'style=feature:transit%7Cvisibility:off',
-    'style=feature:road%7Celement:labels.icon%7Cvisibility:off'
+    'style=feature:transit%7Cvisibility:off'
   ].join('&')
 
-  const url = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=2&maptype=roadmap&${markers}&${path}&${style}&key=${KEY}`
+  const url = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=1&maptype=roadmap&${markers}&${path}&${style}&key=${KEY}`
 
   const img = document.createElement('img')
   img.style.cssText = 'width:100%;height:220px;object-fit:cover;display:block'
