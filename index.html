@@ -194,6 +194,8 @@ button{cursor:pointer}
 .delbtn:hover{border-color:#000;color:#000}
 .movebtn{font-size:8px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888;line-height:1.4}
 .draghandle{font-size:14px;border:none;background:none;padding:1px 4px;color:#bbb;line-height:1;cursor:grab;touch-action:none;user-select:none}
+#city-tabs::-webkit-scrollbar{display:none}
+.city-tab{transition:color .2s,border-color .2s}
 .draghandle:hover{color:#000}
 .draghandle:active{cursor:grabbing}
 .pitem.dragging{cursor:grabbing}
@@ -405,10 +407,15 @@ button{cursor:pointer}
     </div>
   </div>
   <div class="daytotal" id="day-total" style="display:none">[ 일자별 사용금액 ] <span id="day-total-val"></span></div>
-  <div id="day-minimap-toggle" style="display:none;padding:10px 20px;border-bottom:.5px solid #ddd;cursor:pointer;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;user-select:none">[ 🗺 오늘의 루트 보기 ▾ ]</div>
-  <div id="day-minimap" style="display:none;position:relative;border-bottom:1px solid #000">
-    <div id="day-minimap-inner" style="width:100%;height:220px;position:relative;background:#f0f0f0;overflow:hidden"></div>
-    <div style="position:absolute;bottom:8px;right:10px;font-size:8px;letter-spacing:.1em;text-transform:uppercase;background:rgba(0,0,0,.7);color:#fff;padding:4px 10px;cursor:pointer" id="day-minimap-open">전체 경로 열기 →</div>
+  <div id="day-minimap-toggle" style="display:none;padding:12px 20px;border-bottom:.5px solid #e5e5e5;cursor:pointer;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#999;user-select:none;display:flex;align-items:center;gap:6px">
+    <span>오늘의 루트</span><span id="minimap-arrow" style="font-size:8px">▾</span>
+  </div>
+  <div id="day-minimap" style="display:none;border-bottom:1px solid #000;background:#fff">
+    <div id="city-tabs" style="display:flex;gap:0;overflow-x:auto;border-bottom:.5px solid #e5e5e5;padding:0 12px;scrollbar-width:none"></div>
+    <div id="minimap-swipe" style="position:relative;overflow:hidden">
+      <div id="minimap-track" style="display:flex;transition:transform .3s cubic-bezier(.4,0,.2,1)"></div>
+    </div>
+    <div id="minimap-dots" style="display:flex;justify-content:center;gap:5px;padding:8px 0;background:#fafafa"></div>
   </div>
   <div class="places" id="p3-places"></div>
   <div class="add-place">
@@ -1072,13 +1079,17 @@ function renderP3() {
   const day = (trip.days || []).find(d => d.id === state.dayId)
   if (!day) return
 
-  // 날짜가 바뀌면 미니맵 토글 상태 초기화
-  const toggleEl = document.getElementById('day-minimap-toggle')
+  // 날짜가 바뀌면 미니맵 닫고 초기화
   const mapEl = document.getElementById('day-minimap')
-  if (toggleEl) { delete toggleEl.dataset.bound; toggleEl.textContent = '[ 🗺 오늘의 루트 보기 ▾ ]' }
+  const arrow = document.getElementById('minimap-arrow')
   if (mapEl) mapEl.style.display = 'none'
-  const innerEl = document.getElementById('day-minimap-inner')
-  if (innerEl) { innerEl.innerHTML = ''; innerEl.dataset.mapKey = '' }
+  if (arrow) arrow.textContent = '▾'
+  const track = document.getElementById('minimap-track')
+  if (track) { track.innerHTML = ''; track.style.transform = '' }
+  const tabs = document.getElementById('city-tabs')
+  if (tabs) tabs.innerHTML = ''
+  minimapCities = []
+  minimapCurrentCity = 0
 
   const MON = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
   const dateObj = day.date ? new Date(day.date) : null
@@ -1115,7 +1126,10 @@ function renderP3() {
   inp.onkeydown = e => { if (e.key === 'Enter') doAddPlace() }
 }
 
-/* ── 하루 루트 미니맵 (토글 열 때만 API 호출) ── */
+/* ── 하루 루트 미니맵 — 도시별 탭 + 스와이프 ── */
+let minimapCurrentCity = 0
+let minimapCities = []
+
 function renderDayMinimap() {
   const toggleEl = document.getElementById('day-minimap-toggle')
   const mapEl = document.getElementById('day-minimap')
@@ -1127,100 +1141,188 @@ function renderDayMinimap() {
 
   const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
 
-  if (places.length < 2) {
+  if (places.length < 1) {
     toggleEl.style.display = 'none'
     mapEl.style.display = 'none'
     return
   }
 
-  toggleEl.style.display = 'block'
+  toggleEl.style.display = 'flex'
 
-  // 기존 이벤트 리스너 완전히 제거 — cloneNode로 교체
+  // 리스너 중복 방지 — cloneNode 교체
   const newToggle = toggleEl.cloneNode(true)
   toggleEl.parentNode.replaceChild(newToggle, toggleEl)
 
   newToggle.addEventListener('click', () => {
-    const inner = document.getElementById('day-minimap-inner')
     const isOpen = mapEl.style.display !== 'none'
+    const arrow = document.getElementById('minimap-arrow')
     if (isOpen) {
       mapEl.style.display = 'none'
-      newToggle.textContent = '[ 🗺 오늘의 루트 보기 ▾ ]'
-      if (inner) { inner.dataset.mapKey = ''; inner.innerHTML = '' }
+      if (arrow) arrow.textContent = '▾'
     } else {
       mapEl.style.display = 'block'
-      newToggle.textContent = '[ 🗺 오늘의 루트 닫기 ▴ ]'
-      requestAnimationFrame(() => loadMinimapImage())
+      if (arrow) arrow.textContent = '▴'
+      requestAnimationFrame(() => buildCityMaps())
     }
   })
+}
 
-  // 전체경로 버튼
-  const openBtn = document.getElementById('day-minimap-open')
-  if (openBtn) {
-    const newBtn = openBtn.cloneNode(true)
-    openBtn.parentNode.replaceChild(newBtn, openBtn)
-    newBtn.addEventListener('click', e => { e.stopPropagation(); openMinimapRoute() })
+// 장소를 도시별로 그룹화 (주소의 도시명 기준, 없으면 좌표 근접도)
+function groupPlacesByCity(places) {
+  const groups = []
+  let cur = null
+  places.forEach(p => {
+    // 주소에서 도시 추정 — "체코"/"독일" 같은 국가 또는 도시명
+    const cityKey = extractCity(p)
+    if (!cur || cur.key !== cityKey) {
+      cur = { key: cityKey, name: cityKey, places: [] }
+      groups.push(cur)
+    }
+    cur.places.push(p)
+  })
+  return groups
+}
+
+function extractCity(place) {
+  // 주소 형식: "Legerova 72, 120 00 Vinohrady, 체코" → 도시 부분 추출
+  const addr = place.address || ''
+  // 한국 주소가 아니면 대략 도시명 매칭 (Praha/Prague, Dresden 등)
+  const cityMatch = addr.match(/(Praha|Prague|프라하|Dresden|드레스덴|Wien|Vienna|비엔나|빈|Budapest|부다페스트|Brno|브르노)/i)
+  if (cityMatch) {
+    const c = cityMatch[1].toLowerCase()
+    if (/praha|prague|프라하/.test(c)) return '프라하'
+    if (/dresden|드레스덴/.test(c)) return '드레스덴'
+    if (/wien|vienna|비엔나|빈/.test(c)) return '비엔나'
+    if (/budapest|부다페스트/.test(c)) return '부다페스트'
+    if (/brno|브르노/.test(c)) return '브르노'
   }
+  // 좌표 기반 대략 그룹 (0.3도 이내면 같은 도시로 — fallback)
+  return '루트'
 }
 
-function openMinimapRoute() {
+function buildCityMaps() {
   const trip = DB.getTrip(state.tripId)
   const day = (trip?.days || []).find(d => d.id === state.dayId)
   if (!day) return
-  const ps = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
-  if (ps.length < 2) return
-  const origin = `${ps[0].lat},${ps[0].lng}`
-  const dest = `${ps[ps.length-1].lat},${ps[ps.length-1].lng}`
-  const wps = ps.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('%7C')
-  window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}${wps ? '&waypoints=' + wps : ''}&travelmode=walking`, '_blank')
+  const allPlaces = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
+  if (!allPlaces.length) return
+
+  minimapCities = groupPlacesByCity(allPlaces)
+  minimapCurrentCity = 0
+
+  const tabsEl = document.getElementById('city-tabs')
+  const trackEl = document.getElementById('minimap-track')
+  const dotsEl = document.getElementById('minimap-dots')
+  if (!tabsEl || !trackEl || !dotsEl) return
+
+  // 도시 탭
+  tabsEl.innerHTML = minimapCities.map((c, i) =>
+    `<button class="city-tab" data-idx="${i}" style="flex-shrink:0;padding:11px 14px;font-size:10px;letter-spacing:.05em;font-weight:${i===0?'700':'400'};color:${i===0?'#000':'#aaa'};background:none;border:none;border-bottom:2px solid ${i===0?'#000':'transparent'};cursor:pointer;white-space:nowrap">${c.name} <span style="font-size:8px;color:#ccc">${c.places.length}</span></button>`
+  ).join('')
+
+  // 슬라이드 (각 도시 지도)
+  trackEl.innerHTML = minimapCities.map((c, i) =>
+    `<div class="city-slide" data-idx="${i}" style="min-width:100%;box-sizing:border-box"><div class="city-map-inner" data-idx="${i}" style="width:100%;height:200px;background:#f2f2f2;position:relative"></div></div>`
+  ).join('')
+
+  // 도트 (도시 1개면 숨김)
+  dotsEl.style.display = minimapCities.length > 1 ? 'flex' : 'none'
+  dotsEl.innerHTML = minimapCities.map((_, i) =>
+    `<span class="city-dot" data-idx="${i}" style="width:6px;height:6px;border-radius:50%;background:${i===0?'#000':'#ddd'};cursor:pointer;transition:background .2s"></span>`
+  ).join('')
+
+  // 탭/도트 클릭
+  tabsEl.querySelectorAll('.city-tab').forEach(t =>
+    t.addEventListener('click', () => goToCity(parseInt(t.dataset.idx, 10))))
+  dotsEl.querySelectorAll('.city-dot').forEach(d =>
+    d.addEventListener('click', () => goToCity(parseInt(d.dataset.idx, 10))))
+
+  // 스와이프 제스처
+  setupMinimapSwipe()
+
+  // 각 도시 지도 이미지 로드
+  minimapCities.forEach((c, i) => loadCityMap(i))
+
+  goToCity(0)
 }
 
-function loadMinimapImage() {
-  const inner = document.getElementById('day-minimap-inner')
-  if (!inner) return
-
-  const trip = DB.getTrip(state.tripId)
-  const day = (trip?.days || []).find(d => d.id === state.dayId)
-  if (!day) return
-  const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
-  if (places.length < 2) return
-
-  const newKey = places.map(p => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`).join('|')
-  if (inner.dataset.mapKey === newKey) return
-  inner.dataset.mapKey = newKey
-  inner.innerHTML = ''
-  inner.style.cssText = 'width:100%;height:220px;display:block;background:#e8e8e8'
+function loadCityMap(idx) {
+  const inner = document.querySelector(`.city-map-inner[data-idx="${idx}"]`)
+  if (!inner || inner.dataset.loaded) return
+  const city = minimapCities[idx]
+  if (!city) return
+  inner.dataset.loaded = '1'
 
   const KEY = 'AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew'
   const w = Math.min(Math.round(window.innerWidth || 400), 600)
   const h = 200
+  const ps = city.places
 
-  // 번호 마커 — 검정 통일, 최대 9개
-  const markers = places.slice(0, 9).map((p, i) =>
+  const markers = ps.slice(0, 9).map((p, i) =>
     `markers=size:mid%7Ccolor:0x000000%7Clabel:${i+1}%7C${p.lat},${p.lng}`
   ).join('&')
-
-  // 경로선
-  const path = `path=color:0x000000DD%7Cweight:3%7C${places.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
-
-  // POI 숨기기
-  const style = [
-    'style=feature:poi%7Cvisibility:off',
-    'style=feature:transit%7Cvisibility:off'
-  ].join('&')
-
-  const url = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=1&maptype=roadmap&${markers}&${path}&${style}&key=${KEY}`
+  const pathStr = ps.length > 1
+    ? `&path=color:0x000000DD%7Cweight:2%7C${ps.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
+    : ''
+  const style = 'style=feature:poi%7Cvisibility:off&style=feature:transit%7Cvisibility:off'
+  const url = `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=1&maptype=roadmap&${markers}${pathStr}&${style}&key=${KEY}`
 
   const img = document.createElement('img')
-  img.style.cssText = 'width:100%;height:220px;object-fit:cover;display:block'
+  img.style.cssText = 'width:100%;height:200px;object-fit:cover;display:block'
   img.src = url
   img.onerror = () => {
     img.onerror = null
-    inner.innerHTML = `<div style="height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#888">
-      <div style="font-size:11px">지도를 불러올 수 없어요</div>
-      <div style="font-size:9px;color:#bbb">Google Cloud Console에서 Maps Static API 활성화 확인</div>
-    </div>`
+    inner.innerHTML = `<div style="height:200px;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:10px">지도를 불러올 수 없어요</div>`
+  }
+  // 클릭 시 전체경로 열기
+  inner.style.cursor = 'pointer'
+  inner.onclick = () => {
+    if (ps.length < 1) return
+    const origin = `${ps[0].lat},${ps[0].lng}`
+    const dest = `${ps[ps.length-1].lat},${ps[ps.length-1].lng}`
+    const wps = ps.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('%7C')
+    window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}${wps ? '&waypoints=' + wps : ''}&travelmode=walking`, '_blank')
   }
   inner.appendChild(img)
+}
+
+function goToCity(idx) {
+  if (idx < 0 || idx >= minimapCities.length) return
+  minimapCurrentCity = idx
+  const track = document.getElementById('minimap-track')
+  if (track) track.style.transform = `translateX(-${idx * 100}%)`
+
+  document.querySelectorAll('.city-tab').forEach((t, i) => {
+    t.style.fontWeight = i === idx ? '700' : '400'
+    t.style.color = i === idx ? '#000' : '#aaa'
+    t.style.borderBottomColor = i === idx ? '#000' : 'transparent'
+  })
+  document.querySelectorAll('.city-dot').forEach((d, i) => {
+    d.style.background = i === idx ? '#000' : '#ddd'
+  })
+  loadCityMap(idx)
+}
+
+function setupMinimapSwipe() {
+  const swipe = document.getElementById('minimap-swipe')
+  if (!swipe || swipe.dataset.swipeBound) return
+  swipe.dataset.swipeBound = '1'
+  let startX = 0, startY = 0, dragging = false
+  swipe.addEventListener('touchstart', e => {
+    startX = e.touches[0].clientX
+    startY = e.touches[0].clientY
+    dragging = true
+  }, { passive: true })
+  swipe.addEventListener('touchend', e => {
+    if (!dragging) return
+    dragging = false
+    const dx = e.changedTouches[0].clientX - startX
+    const dy = e.changedTouches[0].clientY - startY
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+      if (dx < 0) goToCity(minimapCurrentCity + 1)
+      else goToCity(minimapCurrentCity - 1)
+    }
+  }, { passive: true })
 }
 
 /* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만) ── */
