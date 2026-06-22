@@ -330,11 +330,19 @@ button{cursor:pointer}
 
 <nav class="nav">
   <span class="nav-logo" id="nav-logo">MY TRAVELS</span>
-  <div style="display:flex;align-items:center;gap:10px">
+  <div style="display:flex;align-items:center;gap:12px">
     <span class="share-mode-badge">읽기 전용 (공유됨)</span>
-    <span id="auth-status" style="font-size:9px;color:#888;letter-spacing:.05em"></span>
+    <span id="sync-time" style="font-size:9px;color:#bbb;letter-spacing:.03em"></span>
+    <div id="profile-wrap" style="position:relative;display:none">
+      <button id="profile-btn" style="display:flex;align-items:center;gap:5px;border:none;background:none;cursor:pointer;padding:0">
+        <span id="auth-status"></span>
+        <span id="admin-gear" style="display:none;font-size:12px">⚙️</span>
+      </button>
+      <div id="profile-menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;background:#fff;border:1px solid #000;min-width:120px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.1)">
+        <button id="logout-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;background:#fff;cursor:pointer;color:#000">로그아웃</button>
+      </div>
+    </div>
     <button id="auth-btn" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 10px;color:#888">로그인</button>
-    <button id="nav-back">← 뒤로</button>
   </div>
 </nav>
 
@@ -443,6 +451,7 @@ const DB = {
   save(t) {
     try {
       localStorage.setItem('mt_trips', JSON.stringify(t))
+      localStorage.setItem('mt_trips_saved_at', String(Date.now()))
     } catch (e) {
       console.error('저장 실패:', e)
       throw e
@@ -611,21 +620,15 @@ function renderPage() {
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'))
   document.getElementById(state.page).classList.add('active')
   document.body.classList.toggle('share-mode', !!state.shareMode)
-  const back = document.getElementById('nav-back')
   const logo = document.getElementById('nav-logo')
   if (state.page === 'p1') {
-    back.style.display = 'none'
     logo.textContent = 'MY TRAVELS'
     renderP1()
   } else if (state.page === 'p2') {
-    back.style.display = 'block'
-    back.onclick = () => go('p1')
     const trip = DB.getTrip(state.tripId)
     logo.textContent = trip ? cleanName(trip.name) : ''
     renderP2()
   } else if (state.page === 'p3') {
-    back.style.display = 'block'
-    back.onclick = () => go('p2', { tripId: state.tripId })
     logo.textContent = 'DAY DETAIL'
     renderP3()
   }
@@ -1097,28 +1100,31 @@ function renderDayMinimap() {
 
   toggleEl.style.display = 'block'
 
-  if (!toggleEl.dataset.bound) {
-    toggleEl.dataset.bound = '1'
-    toggleEl.addEventListener('click', () => {
-      const isOpen = mapEl.style.display !== 'none'
-      if (isOpen) {
-        mapEl.style.display = 'none'
-        toggleEl.textContent = '[ 🗺 오늘의 루트 보기 ▾ ]'
-        // 닫을 때 캐시 초기화 → 재열기 시 최신 데이터 반영
-        const inner = document.getElementById('day-minimap-inner')
-        if (inner) { inner.dataset.mapKey = ''; inner.innerHTML = '' }
-      } else {
-        mapEl.style.display = 'block'
-        toggleEl.textContent = '[ 🗺 오늘의 루트 닫기 ▴ ]'
-        requestAnimationFrame(() => loadMinimapImage())
-      }
-    })
-    document.getElementById('day-minimap-open')?.addEventListener('click', e => {
-      e.stopPropagation()
-      openMinimapRoute()
-    })
+  // 기존 이벤트 리스너 완전히 제거 — cloneNode로 교체
+  const newToggle = toggleEl.cloneNode(true)
+  toggleEl.parentNode.replaceChild(newToggle, toggleEl)
+
+  newToggle.addEventListener('click', () => {
+    const inner = document.getElementById('day-minimap-inner')
+    const isOpen = mapEl.style.display !== 'none'
+    if (isOpen) {
+      mapEl.style.display = 'none'
+      newToggle.textContent = '[ 🗺 오늘의 루트 보기 ▾ ]'
+      if (inner) { inner.dataset.mapKey = ''; inner.innerHTML = '' }
+    } else {
+      mapEl.style.display = 'block'
+      newToggle.textContent = '[ 🗺 오늘의 루트 닫기 ▴ ]'
+      requestAnimationFrame(() => loadMinimapImage())
+    }
+  })
+
+  // 전체경로 버튼
+  const openBtn = document.getElementById('day-minimap-open')
+  if (openBtn) {
+    const newBtn = openBtn.cloneNode(true)
+    openBtn.parentNode.replaceChild(newBtn, openBtn)
+    newBtn.addEventListener('click', e => { e.stopPropagation(); openMinimapRoute() })
   }
-  // 열려있어도 자동 재로드 안 함 — 사용자 토글 클릭 시에만 로드
 }
 
 function openMinimapRoute() {
@@ -3276,25 +3282,42 @@ document.getElementById('guide-overlay').addEventListener('click', e => {
    INIT
    ========================================================= */
 // ── Supabase 동기화 ──
-async function syncToSupabase(trips) {
-  if (!supa || !currentUser) return
-  try {
-    await supa.from('trips_data').upsert({ user_id: currentUser.id, data: trips, updated_at: new Date().toISOString() })
-  } catch (e) {
-    console.error('동기화 실패:', e)
-  }
-}
-
 async function loadFromSupabase() {
   if (!supa || !currentUser) return
   try {
-    const { data, error } = await supa.from('trips_data').select('data').eq('user_id', currentUser.id).maybeSingle()
+    const { data, error } = await supa.from('trips_data')
+      .select('data, updated_at')
+      .eq('user_id', currentUser.id)
+      .maybeSingle()
     if (error) { console.error('불러오기 실패:', error); return }
+
     if (data && data.data) {
-      // 서버 데이터가 있으면 그것으로 덮어씀 (다른 기기에서 작업한 최신 데이터)
-      localStorage.setItem('mt_trips', JSON.stringify(data.data))
+      const serverTime = data.updated_at ? new Date(data.updated_at).getTime() : 0
+      const localTime = parseInt(localStorage.getItem('mt_trips_saved_at') || '0', 10)
+      const localTrips = JSON.parse(localStorage.getItem('mt_trips') || '[]')
+
+      if (serverTime >= localTime || !localTrips.length) {
+        // 서버가 최신이거나 로컬이 비어있음 → 서버 데이터 사용
+        localStorage.setItem('mt_trips', JSON.stringify(data.data))
+        localStorage.setItem('mt_trips_saved_at', String(serverTime))
+      } else {
+        // 로컬이 더 최신 → 사용자에게 선택 요청
+        const diff = Math.round((localTime - serverTime) / 60000)
+        const useLocal = confirm(
+          `⚠️ 데이터 충돌 감지\n\n` +
+          `이 기기의 데이터가 서버보다 약 ${diff}분 더 최신이에요.\n\n` +
+          `[확인] 이 기기 데이터 유지 → 서버에 업로드\n` +
+          `[취소] 서버 데이터 사용 (이 기기 변경사항 버림)`
+        )
+        if (useLocal) {
+          await syncToSupabase(localTrips)
+        } else {
+          localStorage.setItem('mt_trips', JSON.stringify(data.data))
+          localStorage.setItem('mt_trips_saved_at', String(serverTime))
+        }
+      }
     } else {
-      // 서버에 데이터 없음 — 로컬 데이터를 첫 업로드 (마이그레이션)
+      // 서버에 데이터 없음 → 로컬 업로드
       const local = DB.trips
       if (local.length) await syncToSupabase(local)
     }
@@ -3303,25 +3326,105 @@ async function loadFromSupabase() {
   }
 }
 
+async function syncToSupabase(trips) {
+  if (!supa || !currentUser) return
+  try {
+    const now = new Date().toISOString()
+    const { error } = await supa.from('trips_data').upsert({
+      user_id: currentUser.id,
+      data: trips,
+      updated_at: now
+    })
+    if (!error) {
+      localStorage.setItem('mt_trips_saved_at', String(new Date(now).getTime()))
+      updateSyncTime()
+    } else {
+      console.error('서버 동기화 실패:', error)
+    }
+  } catch (e) {
+    console.error('동기화 오류:', e)
+  }
+}
+
+// 탭 복귀 시 서버 최신 데이터 조용히 확인 (충돌 없는 경우만 자동 반영)
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || !currentUser || !supa) return
+  try {
+    const { data } = await supa.from('trips_data')
+      .select('updated_at')
+      .eq('user_id', currentUser.id)
+      .maybeSingle()
+    if (!data) return
+    const serverTime = data.updated_at ? new Date(data.updated_at).getTime() : 0
+    const localTime = parseInt(localStorage.getItem('mt_trips_saved_at') || '0', 10)
+    if (serverTime > localTime) {
+      // 서버가 더 최신 → 조용히 업데이트
+      await loadFromSupabase()
+      renderPage()
+    }
+  } catch (e) { /* ignore */ }
+})
+
 const ADMIN_EMAIL = 'jeein12231223@gmail.com'
 function isAdmin() { return currentUser && currentUser.email === ADMIN_EMAIL }
+
+function updateSyncTime() {
+  const el = document.getElementById('sync-time')
+  if (!el) return
+  const saved = parseInt(localStorage.getItem('mt_trips_saved_at') || '0', 10)
+  if (!saved) { el.textContent = ''; return }
+  const d = new Date(saved)
+  const now = Date.now()
+  const diffMin = Math.round((now - saved) / 60000)
+  let label
+  if (diffMin < 1) label = '방금 동기화'
+  else if (diffMin < 60) label = `${diffMin}분 전 동기화`
+  else if (diffMin < 1440) label = `${Math.floor(diffMin/60)}시간 전 동기화`
+  else label = `${d.getMonth()+1}/${d.getDate()} 동기화`
+  el.textContent = `🔄 ${label}`
+}
 
 function updateAuthUI() {
   const statusEl = document.getElementById('auth-status')
   const btnEl = document.getElementById('auth-btn')
+  const profileWrap = document.getElementById('profile-wrap')
+  const adminGear = document.getElementById('admin-gear')
+
   if (currentUser) {
     const initial = (currentUser.email || '?')[0].toUpperCase()
-    const adminBadge = isAdmin() ? ' <span title="관리자" style="font-size:13px;cursor:pointer" id="admin-panel-btn">⚙️</span>' : ''
-    statusEl.innerHTML = `<span class="user-avatar" title="${currentUser.email}">${initial}</span>${adminBadge}`
-    btnEl.textContent = '로그아웃'
-    if (isAdmin()) {
-      document.getElementById('admin-panel-btn')?.addEventListener('click', openAdminPanel)
-    }
+    statusEl.innerHTML = `<span class="user-avatar" title="${currentUser.email}">${initial}</span>`
+    profileWrap.style.display = 'block'
+    btnEl.style.display = 'none'
+    if (adminGear) adminGear.style.display = isAdmin() ? 'inline' : 'none'
+    updateSyncTime()
   } else {
     statusEl.innerHTML = ''
+    profileWrap.style.display = 'none'
+    btnEl.style.display = 'inline-block'
     btnEl.textContent = '로그인'
+    const st = document.getElementById('sync-time')
+    if (st) st.textContent = ''
   }
 }
+
+// 프로필 클릭 → 메뉴 토글
+document.getElementById('profile-btn')?.addEventListener('click', e => {
+  e.stopPropagation()
+  // 어드민이면 기어 클릭 시 관리 패널
+  if (e.target.id === 'admin-gear' && isAdmin()) { openAdminPanel(); return }
+  const menu = document.getElementById('profile-menu')
+  if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none'
+})
+document.addEventListener('click', () => {
+  const menu = document.getElementById('profile-menu')
+  if (menu) menu.style.display = 'none'
+})
+document.getElementById('logout-btn')?.addEventListener('click', async () => {
+  await supa?.auth.signOut()
+  currentUser = null
+  updateAuthUI()
+  location.reload()
+})
 
 function openAuthModal() {
   const modal = document.getElementById('modal')
@@ -3447,17 +3550,12 @@ async function renderAdminList() {
   }
 }
 
-document.getElementById('auth-btn')?.addEventListener('click', async () => {
-  if (currentUser) {
-    if (confirm('로그아웃 하시겠어요?')) {
-      await supa.auth.signOut()
-      currentUser = null
-      updateAuthUI()
-    }
-  } else {
-    openAuthModal()
-  }
+document.getElementById('auth-btn')?.addEventListener('click', () => {
+  openAuthModal()
 })
+
+// 동기화 시간 주기적 갱신 (1분마다)
+setInterval(() => { if (currentUser) updateSyncTime() }, 60000)
 
 async function initAuth() {
   if (!supa) return
