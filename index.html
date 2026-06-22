@@ -193,6 +193,10 @@ button{cursor:pointer}
 .delbtn{font-size:8px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888}
 .delbtn:hover{border-color:#000;color:#000}
 .movebtn{font-size:8px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888;line-height:1.4}
+.draghandle{font-size:14px;border:none;background:none;padding:1px 4px;color:#bbb;line-height:1;cursor:grab;touch-action:none;user-select:none}
+.draghandle:hover{color:#000}
+.draghandle:active{cursor:grabbing}
+.pitem.dragging{cursor:grabbing}
 .pmorebtn{font-size:10px;border:.5px solid #ccc;background:#fff;padding:1px 7px;color:#888;line-height:1.4;font-weight:700}
 .pmorebtn:hover{border-color:#000;color:#000}
 .pmap-link{font-size:13px;text-decoration:none;opacity:.5;flex-shrink:0;line-height:1}
@@ -592,7 +596,22 @@ const DB = {
     if (i < 0 || j < 0 || j >= day.places.length) return
     const arr = day.places
     ;[arr[i], arr[j]] = [arr[j], arr[i]]
-    // 순서 변경 후 이동 정보(dirMode/dirDuration/dirDistance)는 재계산 필요하므로 초기화
+    arr.forEach(p => { delete p.dirMode; delete p.dirDuration; delete p.dirDistance })
+    this.save(list)
+  },
+
+  // 드래그앤드롭 — placeId를 toIndex 위치로 이동
+  reorderPlaces(tripId, dayId, placeId, toIndex) {
+    const list = this.trips
+    const trip = list.find(t => t.id === tripId)
+    if (!trip) return
+    const day = trip.days.find(d => d.id === dayId)
+    if (!day) return
+    const arr = day.places
+    const from = arr.findIndex(p => p.id === placeId)
+    if (from < 0 || toIndex < 0 || toIndex >= arr.length || from === toIndex) return
+    const [moved] = arr.splice(from, 1)
+    arr.splice(toIndex, 0, moved)
     arr.forEach(p => { delete p.dirMode; delete p.dirDuration; delete p.dirDistance })
     this.save(list)
   }
@@ -2051,6 +2070,147 @@ function renderFlightCard(flight) {
   return card
 }
 
+/* ── 장소 카드 드래그앤드롭 (PC 마우스 + 모바일 터치) ── */
+let dragState = null
+
+function setupPlaceDrag(item, handle, placeId) {
+  // 마우스/터치 공통 시작
+  const startDrag = (clientY) => {
+    const listEl = document.getElementById('p3-places')
+    if (!listEl) return
+    const items = Array.from(listEl.querySelectorAll('.pitem[data-place-id]'))
+    dragState = {
+      placeId,
+      item,
+      listEl,
+      items,
+      startY: clientY,
+      itemTop: item.getBoundingClientRect().top,
+      offset: clientY - item.getBoundingClientRect().top
+    }
+    item.classList.add('dragging')
+    item.style.position = 'relative'
+    item.style.zIndex = '50'
+    document.body.style.userSelect = 'none'
+  }
+
+  const moveDrag = (clientY) => {
+    if (!dragState) return
+    const dy = clientY - dragState.startY
+    dragState.item.style.transform = `translateY(${dy}px)`
+    dragState.item.style.opacity = '0.85'
+    dragState.item.style.boxShadow = '0 6px 20px rgba(0,0,0,.18)'
+
+    // 현재 위치에서 가장 가까운 카드 찾기
+    const draggingRect = dragState.item.getBoundingClientRect()
+    const draggingMid = draggingRect.top + draggingRect.height / 2
+
+    dragState.items.forEach(other => {
+      if (other === dragState.item) return
+      other.style.transition = 'transform .15s'
+      const r = other.getBoundingClientRect()
+      const mid = r.top + r.height / 2
+      // 시각적 빈자리 힌트
+      if (draggingMid > r.top && draggingMid < r.bottom) {
+        other.style.background = '#f5f5f5'
+      } else {
+        other.style.background = ''
+      }
+    })
+  }
+
+  const endDrag = (clientY) => {
+    if (!dragState) return
+    const ds = dragState
+    dragState = null
+
+    // 드롭 위치 계산 — 교통편 제외 실제 장소만 대상
+    const trip = DB.getTrip(state.tripId)
+    const day = (trip?.days || []).find(d => d.id === state.dayId)
+    if (!day) { cleanup(ds); return }
+
+    const draggingRect = ds.item.getBoundingClientRect()
+    const draggingMid = draggingRect.top + draggingRect.height / 2
+
+    let targetIndex = -1
+    ds.items.forEach((other, idx) => {
+      if (other === ds.item) return
+      const r = other.getBoundingClientRect()
+      const mid = r.top + r.height / 2
+      if (draggingMid > mid) targetIndex = idx
+    })
+
+    cleanup(ds)
+
+    // DOM 인덱스 → 실제 places 인덱스 매핑
+    const domOrder = ds.items.map(el => el.dataset.placeId)
+    if (targetIndex >= 0 && targetIndex < domOrder.length) {
+      const targetPlaceId = domOrder[targetIndex]
+      const places = day.places
+      const toIdx = places.findIndex(p => p.id === targetPlaceId)
+      if (toIdx >= 0) {
+        DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, toIdx)
+      }
+    } else if (targetIndex < 0) {
+      // 맨 위로
+      DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, 0)
+    }
+    renderPlaces()
+  }
+
+  const cleanup = (ds) => {
+    ds.item.classList.remove('dragging')
+    ds.item.style.transform = ''
+    ds.item.style.opacity = ''
+    ds.item.style.boxShadow = ''
+    ds.item.style.position = ''
+    ds.item.style.zIndex = ''
+    ds.items.forEach(el => { el.style.background = ''; el.style.transition = '' })
+    document.body.style.userSelect = ''
+  }
+
+  // ── 마우스 (PC) ──
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault()
+    startDrag(e.clientY)
+    const onMove = ev => moveDrag(ev.clientY)
+    const onUp = ev => {
+      endDrag(ev.clientY)
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  })
+
+  // ── 터치 (모바일) — 꾹 누르면 시작 (long press 250ms) ──
+  let touchTimer = null
+  let touchStartY = 0
+  handle.addEventListener('touchstart', e => {
+    touchStartY = e.touches[0].clientY
+    touchTimer = setTimeout(() => {
+      startDrag(touchStartY)
+      // 햅틱 피드백
+      if (navigator.vibrate) navigator.vibrate(30)
+    }, 200)
+  }, { passive: true })
+
+  handle.addEventListener('touchmove', e => {
+    if (!dragState) {
+      // 아직 드래그 시작 전 — 움직이면 취소 (스크롤로 간주)
+      if (touchTimer) { clearTimeout(touchTimer); touchTimer = null }
+      return
+    }
+    e.preventDefault()
+    moveDrag(e.touches[0].clientY)
+  }, { passive: false })
+
+  handle.addEventListener('touchend', e => {
+    if (touchTimer) { clearTimeout(touchTimer); touchTimer = null }
+    if (dragState) endDrag(e.changedTouches[0].clientY)
+  })
+}
+
 function renderPlaces() {
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
@@ -2173,6 +2333,7 @@ function renderPlaces() {
     const cat = CAT[place.category] || CAT.attraction
     const item = document.createElement('div')
     item.className = 'pitem'
+    item.dataset.placeId = place.id
     item.innerHTML = `
       <div class="ptop">
         <div class="pleft">
@@ -2189,8 +2350,7 @@ function renderPlaces() {
         </div>
         <div class="pright">
           ${place.isOpen === true ? '<span class="open-b">OPEN</span>' : place.isOpen === false ? '<span class="closed-b">CLOSED</span>' : ''}
-          <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''}>↑</button>
-          <button class="movebtn" data-move="1" ${i === (day.places.length - 1) ? 'disabled' : ''}>↓</button>
+          <button class="draghandle" data-pid="${place.id}" title="꾹 눌러서 순서 변경">⠿</button>
           <button class="pmorebtn" data-pid="${place.id}">+</button>
         </div>
       </div>
@@ -2207,13 +2367,9 @@ function renderPlaces() {
     item.querySelector('.pmorebtn').onclick = () => {
       openPlaceMoreModal(place, day)
     }
-    item.querySelectorAll('.movebtn').forEach(btn => {
-      btn.onclick = () => {
-        const dir = parseInt(btn.dataset.move, 10)
-        DB.movePlace(state.tripId, state.dayId, place.id, dir)
-        renderPlaces()
-      }
-    })
+    // 드래그 핸들 — 꾹 눌러서 순서 변경
+    const handle = item.querySelector('.draghandle')
+    if (handle) setupPlaceDrag(item, handle, place.id)
     item.querySelector('textarea').onchange = e => {
       DB.updatePlace(state.tripId, state.dayId, place.id, { memo: e.target.value })
     }
