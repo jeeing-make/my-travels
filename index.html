@@ -338,9 +338,12 @@ button{cursor:pointer}
         <span id="auth-status"></span>
         <span id="admin-gear" style="display:none;font-size:12px">⚙️</span>
       </button>
-      <div id="profile-menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;background:#fff;border:1px solid #000;min-width:120px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.1)">
+      <div id="profile-menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;background:#fff;border:1px solid #000;min-width:140px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.1)">
+        <button id="backup-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;border-bottom:.5px solid #eee;background:#fff;cursor:pointer;color:#000">💾 백업 (내려받기)</button>
+        <button id="restore-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;border-bottom:.5px solid #eee;background:#fff;cursor:pointer;color:#000">📂 복원 (파일 열기)</button>
         <button id="logout-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;background:#fff;cursor:pointer;color:#000">로그아웃</button>
       </div>
+      <input type="file" id="restore-file" accept="application/json,.json" style="display:none"/>
     </div>
     <button id="auth-btn" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:6px 10px;color:#888">로그인</button>
   </div>
@@ -459,7 +462,20 @@ const DB = {
     // 로그인 상태면 Supabase에도 디바운스 동기화
     if (currentUser) {
       clearTimeout(syncTimer)
-      syncTimer = setTimeout(() => syncToSupabase(t), 800)
+      syncTimer = setTimeout(async () => {
+        const ok = await syncToSupabase(t)
+        if (!ok) {
+          // 실패 시 — 마지막 경고로부터 5분 지났으면 alert
+          const lastWarn = parseInt(sessionStorage.getItem('mt_sync_warned') || '0', 10)
+          if (Date.now() - lastWarn > 5 * 60 * 1000) {
+            sessionStorage.setItem('mt_sync_warned', String(Date.now()))
+            alert('⚠️ 서버 저장이 안 되고 있어요!\n\n' +
+              '변경사항이 이 기기에만 저장되는 중이에요.\n' +
+              '프로필 메뉴에서 💾 백업을 받아두고,\n' +
+              '인터넷/로그인 상태를 확인해주세요.')
+          }
+        }
+      }, 800)
     }
   },
 
@@ -3326,8 +3342,11 @@ async function loadFromSupabase() {
   }
 }
 
-async function syncToSupabase(trips) {
-  if (!supa || !currentUser) return
+async function syncToSupabase(trips, opts) {
+  if (!supa || !currentUser) {
+    if (opts && opts.alertOnFail) alert('⚠️ 저장 안 됨: 로그인이 필요해요.\n로그인 후 다시 시도해주세요.')
+    return false
+  }
   try {
     const now = new Date().toISOString()
     const { error } = await supa.from('trips_data').upsert({
@@ -3338,12 +3357,38 @@ async function syncToSupabase(trips) {
     if (!error) {
       localStorage.setItem('mt_trips_saved_at', String(new Date(now).getTime()))
       updateSyncTime()
+      return true
     } else {
       console.error('서버 동기화 실패:', error)
+      if (opts && opts.alertOnFail) {
+        alert('⚠️ 서버 저장 실패!\n\n' +
+          '변경사항이 이 기기에만 저장됐어요.\n' +
+          '에러: ' + (error.message || '알 수 없음') + '\n\n' +
+          '인터넷 연결을 확인하고, 프로필 메뉴에서 💾 백업을 받아두세요.')
+      }
+      return false
     }
   } catch (e) {
     console.error('동기화 오류:', e)
+    if (opts && opts.alertOnFail) {
+      alert('⚠️ 서버 저장 실패!\n\n' +
+        '변경사항이 이 기기에만 저장됐어요.\n' +
+        '에러: ' + (e.message || '네트워크 오류') + '\n\n' +
+        '프로필 메뉴에서 💾 백업을 받아두세요.')
+    }
+    return false
   }
+}
+
+// 30분마다 자동 저장 — 실패하면 alert
+let autoSaveTimer = null
+function startAutoSave() {
+  if (autoSaveTimer) clearInterval(autoSaveTimer)
+  autoSaveTimer = setInterval(async () => {
+    if (!currentUser || !supa) return
+    const ok = await syncToSupabase(DB.trips, { alertOnFail: true })
+    if (ok) console.log('자동 저장 완료', new Date().toLocaleTimeString())
+  }, 30 * 60 * 1000)  // 30분
 }
 
 // 탭 복귀 시 서버 최신 데이터 조용히 확인 (충돌 없는 경우만 자동 반영)
@@ -3426,6 +3471,58 @@ document.getElementById('logout-btn')?.addEventListener('click', async () => {
   location.reload()
 })
 
+// 백업 — 현재 데이터를 JSON 파일로 내려받기
+document.getElementById('backup-btn')?.addEventListener('click', () => {
+  const data = localStorage.getItem('mt_trips') || '[]'
+  const blob = new Blob([data], { type: 'application/json' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  const now = new Date()
+  a.download = `my_travels_backup_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}.json`
+  a.click()
+})
+
+// 복원 — JSON 파일을 읽어서 데이터 교체
+document.getElementById('restore-btn')?.addEventListener('click', () => {
+  document.getElementById('restore-file')?.click()
+})
+document.getElementById('restore-file')?.addEventListener('change', e => {
+  const file = e.target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = async () => {
+    try {
+      const text = String(reader.result).trim()
+      // 앞뒤 따옴표 제거 (콘솔에서 복사한 경우 대비)
+      const cleaned = text.startsWith("'") && text.endsWith("'") ? text.slice(1, -1)
+                    : text.startsWith('"') && text.endsWith('"') ? JSON.parse(text)
+                    : text
+      const parsed = JSON.parse(cleaned)
+      if (!Array.isArray(parsed)) throw new Error('여행 목록 형식이 아니에요')
+
+      const cur = JSON.parse(localStorage.getItem('mt_trips') || '[]')
+      const ok = confirm(
+        `복원할 데이터: 여행 ${parsed.length}개\n` +
+        `현재 데이터: 여행 ${cur.length}개\n\n` +
+        `[확인] 파일 데이터로 교체 (서버에도 업로드)\n` +
+        `[취소] 중단`
+      )
+      if (!ok) { e.target.value = ''; return }
+
+      localStorage.setItem('mt_trips', JSON.stringify(parsed))
+      localStorage.setItem('mt_trips_saved_at', String(Date.now()))
+      // 서버에도 즉시 업로드
+      if (currentUser && supa) await syncToSupabase(parsed)
+      alert('복원 완료! 데이터를 다시 불러올게요.')
+      location.reload()
+    } catch (err) {
+      alert('복원 실패: ' + err.message + '\n\n파일이 올바른 백업 JSON인지 확인해주세요.')
+    }
+    e.target.value = ''
+  }
+  reader.readAsText(file)
+})
+
 function openAuthModal() {
   const modal = document.getElementById('modal')
   modal.innerHTML = `<div class="mbox" style="max-width:340px">
@@ -3459,10 +3556,14 @@ function openAuthModal() {
     const { data, error } = await supa.auth.signInWithPassword({ email, password })
     if (error) { msg.textContent = error.message; return }
     currentUser = data.user
+    // 저장 권한 등록 (실패 시 경고)
+    const { error: auErr } = await supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
+    if (auErr) alert('⚠️ 계정 권한 등록 실패 — 서버 저장이 안 될 수 있어요.\n저장 안 되면 💾 백업을 받아두세요.\n' + (auErr.message||''))
     await loadFromSupabase()
     updateAuthUI()
     closeModal()
     renderPage()
+    startAutoSave()
   }
   document.getElementById('auth-signup').onclick = async () => {
     const email = document.getElementById('auth-email').value.trim()
@@ -3476,11 +3577,13 @@ function openAuthModal() {
     } else {
       currentUser = data.user
       // 신규 가입자 allowed_users 자동 등록
-      await supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
+      const { error: suErr } = await supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
+      if (suErr) alert('⚠️ 계정 권한 등록 실패 — 서버 저장이 안 될 수 있어요.\n' + (suErr.message||''))
       await loadFromSupabase()
       updateAuthUI()
       closeModal()
       renderPage()
+      startAutoSave()
     }
   }
 }
@@ -3562,11 +3665,19 @@ async function initAuth() {
   const { data } = await supa.auth.getSession()
   if (data.session) {
     currentUser = data.session.user
-    // 로그인 시 allowed_users에 없으면 자동 등록 (기존 유저 마이그레이션)
-    await supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
+    // 로그인 시 allowed_users에 등록 (저장 권한 확보 — 실패하면 저장이 막힘)
+    const { error: auError } = await supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
+    if (auError) {
+      console.error('allowed_users 등록 실패:', auError)
+      alert('⚠️ 계정 권한 등록에 실패했어요.\n\n' +
+        '이 상태로는 서버 저장이 안 될 수 있어요.\n' +
+        '에러: ' + (auError.message || '알 수 없음') + '\n\n' +
+        '저장이 안 되면 프로필 메뉴에서 💾 백업을 꼭 받아두세요.')
+    }
     await loadFromSupabase()
     updateAuthUI()
     renderPage()
+    startAutoSave()  // 30분마다 자동 저장 시작
   }
 }
 
