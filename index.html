@@ -49,15 +49,16 @@ button{cursor:pointer}
 .tcard-menu{display:flex;flex-direction:column;gap:4px;align-items:flex-end}
 .tcard-body{padding:18px 20px 0;min-width:0}
 /* 2열 기준: 카드 너비 = ~50vw. 6글자가 들어가려면 글자당 약 7~8vw */
-.tw1{font-size:clamp(32px,6.5vw,52px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.tw1 .em,.tw2 .em,.tw3 .em{font-size:.62em;vertical-align:middle}
+.tw1{font-size:clamp(26px,5.2vw,44px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.9;color:#000;display:block;white-space:nowrap;overflow:hidden;text-overflow:clip}
 .trow2{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:6px}
 .timg1{width:130px;height:56px;flex-shrink:0;border:1px solid #000;background:#ddd;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:22px;border-radius:14px}
 .timg1 img{width:100%;height:100%;object-fit:cover;display:block}
-.tw2{font-size:clamp(32px,6.5vw,52px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;text-align:right;flex:1;white-space:nowrap;overflow:hidden;text-overflow:clip}
-.tw3{font-size:clamp(32px,6.5vw,52px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.88;color:#000;display:block;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.tw2{font-size:clamp(26px,5.2vw,44px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.9;color:#000;text-align:right;flex:1;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.tw3{font-size:clamp(26px,5.2vw,44px);font-weight:900;letter-spacing:-.04em;text-transform:uppercase;line-height:.9;color:#000;display:block;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:clip}
 /* 모바일 1열: 카드 = 100vw이므로 글자 더 크게 */
 @media(max-width:640px){
-  .tw1,.tw2,.tw3{font-size:clamp(44px,12vw,64px)}
+  .tw1,.tw2,.tw3{font-size:clamp(32px,9vw,52px)}
   .timg1{width:150px;height:60px}
 }
 .tfoot{border-top:.5px solid #ddd;margin-top:16px;padding:12px 20px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px}
@@ -806,6 +807,12 @@ function cleanName(name) {
   return (name || '').replace(/\//g, '').toUpperCase()
 }
 
+// 제목 안 이모지를 작게 감싸기 (글자 폭 절약 + 잘림 방지)
+function wrapEmoji(str) {
+  const emojiRe = /(\p{Extended_Pictographic}(\u200d\p{Extended_Pictographic})*|\p{Regional_Indicator}{2})/gu
+  return String(str).replace(emojiRe, '<span class="em">$1</span>')
+}
+
 /* =========================================================
    CATEGORY
    ========================================================= */
@@ -926,12 +933,12 @@ function renderP1() {
         </div>
       </div>
       <div class="tcard-body">
-        <span class="tw1">${w1.toUpperCase()}</span>
+        <span class="tw1">${wrapEmoji(w1.toUpperCase())}</span>
         <div class="trow2">
           <div class="timg1">${img1Html}</div>
-          <span class="tw2">${(w2 || trip.emoji || '.').toUpperCase()}</span>
+          <span class="tw2">${wrapEmoji((w2 || trip.emoji || '.').toUpperCase())}</span>
         </div>
-        <span class="tw3">${(w3 || '.').toUpperCase()}</span>
+        <span class="tw3">${wrapEmoji((w3 || '.').toUpperCase())}</span>
       </div>
       <div class="tfoot">
         <div class="tmeta">
