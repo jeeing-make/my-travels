@@ -1022,10 +1022,14 @@ function countryCodeToFlag(code) {
 }
 
 // Day의 첫/끝 장소 좌표로 국가 조회 -> day.countryFlag 캐시
+const _resolvedCountryFlags = new Set() // 세션 내 중복 Geocoding 방지
 async function resolveDayCountryFlag(trip, day) {
   if (typeof google === 'undefined' || !google.maps) return
+  const cacheKey = `${trip.id}:${day.id}`
+  if (_resolvedCountryFlags.has(cacheKey)) return
   const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
   if (!places.length) return
+  _resolvedCountryFlags.add(cacheKey)
   try {
     const geocoder = new google.maps.Geocoder()
 
@@ -2800,7 +2804,7 @@ function renderPlaces() {
   const day3 = (trip3.days || []).find(d => d.id === state.dayId)
   if (day3) {
     const hasCoordPlaces = (day3.places || []).some(p => p.category !== 'transport' && p.lat != null)
-    if (hasCoordPlaces) resolveDayCountryFlag(trip3, day3)
+    if (hasCoordPlaces && !day3.countryFlag) resolveDayCountryFlag(trip3, day3)
   }
 }
 
