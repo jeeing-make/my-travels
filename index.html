@@ -347,6 +347,7 @@ button{cursor:pointer}
       <div id="profile-menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;background:#fff;border:1px solid #000;min-width:140px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.1)">
         <button id="backup-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;border-bottom:.5px solid #eee;background:#fff;cursor:pointer;color:#000">💾 백업 (내려받기)</button>
         <button id="restore-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;border-bottom:.5px solid #eee;background:#fff;cursor:pointer;color:#000">📂 복원 (파일 열기)</button>
+        <button id="restore-prev-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;border-bottom:.5px solid #eee;background:#fff;cursor:pointer;color:#c00">↩️ 직전 데이터로 되돌리기</button>
         <button id="logout-btn" style="display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;border:none;background:#fff;cursor:pointer;color:#000">로그아웃</button>
       </div>
       <input type="file" id="restore-file" accept="application/json,.json" style="display:none"/>
@@ -457,13 +458,130 @@ const supa = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABA
 let currentUser = null
 let syncTimer = null
 
+/* =========================================================
+   동기화 병합 엔진 — trip/day/place 단위 updatedAt 기반
+   ========================================================= */
+function stampTimestamps(trips, prevTrips) {
+  const now = Date.now()
+  const prevMap = {}
+  ;(prevTrips || []).forEach(t => { prevMap[t.id] = t })
+
+  trips.forEach(trip => {
+    const pTrip = prevMap[trip.id]
+    if (!trip._updatedAt) trip._updatedAt = now
+    if (!pTrip || metaChanged(trip, pTrip)) trip._updatedAt = now
+
+    const pDayMap = {}
+    ;(pTrip?.days || []).forEach(d => { pDayMap[d.id] = d })
+    ;(trip.days || []).forEach(day => {
+      if (!day._updatedAt) day._updatedAt = now
+      const pDay = pDayMap[day.id]
+      if (!pDay || JSON.stringify(stripChildren(day)) !== JSON.stringify(stripChildren(pDay))) {
+        day._updatedAt = now
+      }
+      const pPlaceMap = {}
+      ;(pDay?.places || []).forEach(p => { pPlaceMap[p.id] = p })
+      ;(day.places || []).forEach(place => {
+        if (!place._updatedAt) place._updatedAt = now
+        const pPlace = pPlaceMap[place.id]
+        if (!pPlace || JSON.stringify({...place, _updatedAt:0}) !== JSON.stringify({...pPlace, _updatedAt:0})) {
+          place._updatedAt = now
+        }
+      })
+    })
+    ;(trip.hotels || []).forEach(h => { if (!h._updatedAt) h._updatedAt = now })
+    ;(trip.flights || []).forEach(f => { if (!f._updatedAt) f._updatedAt = now })
+  })
+  return trips
+}
+
+function metaChanged(a, b) {
+  const fields = ['name','emoji','dateStart','dateEnd','countries','companions','photo1','photo2','lat','lon']
+  return fields.some(f => a[f] !== b[f])
+}
+function stripChildren(day) {
+  const { places, _updatedAt, ...rest } = day
+  return rest
+}
+
+function mergeTrips(localTrips, serverTrips) {
+  const byId = {}
+  ;(serverTrips || []).forEach(t => { byId[t.id] = t })
+  ;(localTrips || []).forEach(lt => {
+    const st = byId[lt.id]
+    if (!st) { byId[lt.id] = lt; return }
+    byId[lt.id] = mergeTrip(lt, st)
+  })
+  return Object.values(byId)
+}
+
+function mergeTrip(a, b) {
+  const base = (a._updatedAt || 0) >= (b._updatedAt || 0) ? {...a} : {...b}
+  base.days = mergeById(a.days, b.days, mergeDay)
+  base.hotels = mergeById(a.hotels, b.hotels)
+  base.flights = mergeById(a.flights, b.flights)
+  return base
+}
+
+function mergeDay(a, b) {
+  const base = (a._updatedAt || 0) >= (b._updatedAt || 0) ? {...a} : {...b}
+  base.places = mergeById(a.places, b.places)
+  return base
+}
+
+function mergeById(arrA, arrB, mergeFn) {
+  const map = {}
+  const order = []
+  ;(arrA || []).forEach(item => { map[item.id] = item; order.push(item.id) })
+  ;(arrB || []).forEach(item => {
+    if (!map[item.id]) { map[item.id] = item; order.push(item.id) }
+    else {
+      const ex = map[item.id]
+      if (mergeFn) map[item.id] = mergeFn(ex, item)
+      else map[item.id] = (ex._updatedAt || 0) >= (item._updatedAt || 0) ? ex : item
+    }
+  })
+  return order.map(id => map[id])
+}
+
 const DB = {
+  // 화면 표시용 — tombstone(_deleted) 제거
   get trips() {
+    const raw = this.rawTrips
+    return raw
+      .filter(t => !t._deleted)
+      .map(t => ({
+        ...t,
+        days: (t.days || []).filter(d => !d._deleted).map(d => ({
+          ...d,
+          places: (d.places || []).filter(p => !p._deleted)
+        })),
+        hotels: (t.hotels || []).filter(h => !h._deleted),
+        flights: (t.flights || []).filter(f => !f._deleted)
+      }))
+  },
+  // 저장/병합용 — tombstone 포함 원본
+  get rawTrips() {
+    if (state.isShareSession) return window.__shareTrips || (state.shareData ? [state.shareData] : [])
     if (state.shareMode) return state.shareData ? [state.shareData] : []
     try { return JSON.parse(localStorage.getItem('mt_trips') || '[]') } catch { return [] }
   },
   save(t) {
+    // 공유 세션에서는 localStorage(mt_trips) 절대 안 건드림
+    if (state.isShareSession) {
+      window.__shareTrips = t
+      if (collabShareId) pushCollabData()
+      return
+    }
     try {
+      // 직전 데이터 백업 + 변경 항목 타임스탬프
+      const prev = localStorage.getItem('mt_trips')
+      const prevTrips = prev ? JSON.parse(prev) : []
+      if (prev && prev !== '[]') {
+        localStorage.setItem('mt_trips_prev', prev)
+        localStorage.setItem('mt_trips_prev_at', localStorage.getItem('mt_trips_saved_at') || '')
+      }
+      stampTimestamps(t, prevTrips)  // 변경된 trip/day/place에 _updatedAt 부여
       localStorage.setItem('mt_trips', JSON.stringify(t))
       localStorage.setItem('mt_trips_saved_at', String(Date.now()))
     } catch (e) {
@@ -491,7 +609,7 @@ const DB = {
   },
 
   addTrip(data) {
-    const list = this.trips
+    const list = this.rawTrips
     data.id = 't' + Date.now()
     data.days = data.days || []
     list.push(data)
@@ -500,16 +618,21 @@ const DB = {
   },
   getTrip(id) { return this.trips.find(t => t.id === id) },
   updateTrip(id, patch) {
-    const list = this.trips
+    const list = this.rawTrips
     const i = list.findIndex(t => t.id === id)
     if (i < 0) return
     list[i] = Object.assign({}, list[i], patch)
     this.save(list)
   },
-  deleteTrip(id) { this.save(this.trips.filter(t => t.id !== id)) },
+  deleteTrip(id) {
+    const list = this.rawTrips
+    const t = list.find(x => x.id === id)
+    if (t) { t._deleted = Date.now(); t._updatedAt = Date.now() }
+    this.save(list)
+  },
 
   addDay(tripId, data) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     trip.days = trip.days || []
@@ -521,7 +644,7 @@ const DB = {
   },
   // dateStart~dateEnd 범위의 날짜를 days에 자동으로 채움 (이미 있는 날짜는 건너뜀)
   ensureDaysForRange(tripId) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip || !trip.dateStart || !trip.dateEnd) return
     trip.days = trip.days || []
@@ -545,7 +668,7 @@ const DB = {
     if (added) this.save(list)
   },
   updateDay(tripId, dayId, patch) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     const i = trip.days.findIndex(d => d.id === dayId)
@@ -554,15 +677,16 @@ const DB = {
     this.save(list)
   },
   deleteDay(tripId, dayId) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
-    trip.days = trip.days.filter(d => d.id !== dayId)
+    const d = trip.days.find(x => x.id === dayId)
+    if (d) { d._deleted = Date.now(); d._updatedAt = Date.now() }
     this.save(list)
   },
 
   addPlace(tripId, dayId, data) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
@@ -573,7 +697,7 @@ const DB = {
     return data
   },
   updatePlace(tripId, dayId, placeId, patch) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
@@ -584,16 +708,17 @@ const DB = {
     this.save(list)
   },
   deletePlace(tripId, dayId, placeId) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
     if (!day) return
-    day.places = day.places.filter(p => p.id !== placeId)
+    const p = day.places.find(x => x.id === placeId)
+    if (p) { p._deleted = Date.now(); p._updatedAt = Date.now() }
     this.save(list)
   },
   movePlace(tripId, dayId, placeId, dir) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
@@ -609,7 +734,7 @@ const DB = {
 
   // 드래그앤드롭 — placeId를 toIndex 위치로 이동
   reorderPlaces(tripId, dayId, placeId, toIndex) {
-    const list = this.trips
+    const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
@@ -1292,14 +1417,14 @@ function loadCityMap(idx) {
   const h = 200
   const ps = city.places
 
-  // 작은 검정 마커 (tiny 사이즈, 번호 라벨)
+  // 마커 — size:mid여야 숫자 라벨이 보임 (small은 라벨 안 보임)
   const markers = ps.slice(0, 9).map((p, i) =>
-    `markers=size:small%7Ccolor:0x111111%7Clabel:${i+1}%7C${p.lat},${p.lng}`
+    `markers=size:mid%7Ccolor:0x000000%7Clabel:${i+1}%7C${p.lat},${p.lng}`
   ).join('&')
 
-  // 얇은 점선 경로 (g:1 점선 효과를 위해 weight 낮춤 + 반투명)
+  // 얇은 반투명 경로
   const pathStr = ps.length > 1
-    ? `&path=color:0x00000088%7Cweight:2%7C${ps.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
+    ? `&path=color:0x00000066%7Cweight:2%7C${ps.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
     : ''
 
   // 잘림 방지 — visible 파라미터로 모든 마커 + 여백 강제 표시
@@ -3604,6 +3729,8 @@ document.getElementById('guide-overlay').addEventListener('click', e => {
    ========================================================= */
 // ── Supabase 동기화 ──
 async function loadFromSupabase() {
+  // 🔒 공유 세션에서는 본인 데이터 로드/덮어쓰기 차단
+  if (state.isShareSession) return
   if (!supa || !currentUser) return
   try {
     const { data, error } = await supa.from('trips_data')
@@ -3612,56 +3739,71 @@ async function loadFromSupabase() {
       .maybeSingle()
     if (error) { console.error('불러오기 실패:', error); return }
 
-    if (data && data.data) {
-      const serverTime = data.updated_at ? new Date(data.updated_at).getTime() : 0
-      const localTime = parseInt(localStorage.getItem('mt_trips_saved_at') || '0', 10)
-      const localTrips = JSON.parse(localStorage.getItem('mt_trips') || '[]')
+    const serverTrips = (data && Array.isArray(data.data)) ? data.data : []
+    const localTrips = JSON.parse(localStorage.getItem('mt_trips') || '[]')
 
-      if (serverTime >= localTime || !localTrips.length) {
-        // 서버가 최신이거나 로컬이 비어있음 → 서버 데이터 사용
-        localStorage.setItem('mt_trips', JSON.stringify(data.data))
-        localStorage.setItem('mt_trips_saved_at', String(serverTime))
-      } else {
-        // 로컬이 더 최신 → 사용자에게 선택 요청
-        const diff = Math.round((localTime - serverTime) / 60000)
-        const useLocal = confirm(
-          `⚠️ 데이터 충돌 감지\n\n` +
-          `이 기기의 데이터가 서버보다 약 ${diff}분 더 최신이에요.\n\n` +
-          `[확인] 이 기기 데이터 유지 → 서버에 업로드\n` +
-          `[취소] 서버 데이터 사용 (이 기기 변경사항 버림)`
-        )
-        if (useLocal) {
-          await syncToSupabase(localTrips)
-        } else {
-          localStorage.setItem('mt_trips', JSON.stringify(data.data))
-          localStorage.setItem('mt_trips_saved_at', String(serverTime))
-        }
-      }
-    } else {
-      // 서버에 데이터 없음 → 로컬 업로드
-      const local = DB.trips
-      if (local.length) await syncToSupabase(local)
+    if (!serverTrips.length && !localTrips.length) return
+
+    if (!serverTrips.length) {
+      if (localTrips.length) await syncToSupabase(localTrips)
+      return
     }
+    if (!localTrips.length) {
+      localStorage.setItem('mt_trips', JSON.stringify(serverTrips))
+      localStorage.setItem('mt_trips_saved_at', String(Date.now()))
+      return
+    }
+
+    // 양쪽 다 있음 → 병합 (trip/day/place 단위 최신 우선, 한쪽만 있는 건 보존)
+    const merged = mergeTrips(localTrips, serverTrips)
+    localStorage.setItem('mt_trips_prev', JSON.stringify(localTrips))  // 안전 백업
+    localStorage.setItem('mt_trips', JSON.stringify(merged))
+    localStorage.setItem('mt_trips_saved_at', String(Date.now()))
+    await syncToSupabase(merged)
   } catch (e) {
     console.error('불러오기 오류:', e)
   }
 }
 
 async function syncToSupabase(trips, opts) {
+  // 🔒 공유 세션에서는 본인 trips_data에 절대 쓰지 않음
+  if (state.isShareSession) {
+    console.warn('공유 세션 — 본인 데이터 동기화 차단됨')
+    return false
+  }
   if (!supa || !currentUser) {
     if (opts && opts.alertOnFail) alert('⚠️ 저장 안 됨: 로그인이 필요해요.\n로그인 후 다시 시도해주세요.')
     return false
   }
   try {
+    // 1단계: 서버 현재 데이터 먼저 읽기 (다른 기기가 그사이 저장했을 수 있음)
+    const { data: serverRow } = await supa.from('trips_data')
+      .select('data, updated_at')
+      .eq('user_id', currentUser.id)
+      .maybeSingle()
+
+    let toSave = trips
+    if (serverRow && Array.isArray(serverRow.data) && serverRow.data.length) {
+      // 2단계: 내 데이터 + 서버 데이터 병합 (trip/day/place 단위 최신 우선)
+      toSave = mergeTrips(trips, serverRow.data)
+      // 병합 결과를 로컬에도 반영
+      localStorage.setItem('mt_trips', JSON.stringify(toSave))
+    }
+
+    // 3단계: 병합된 결과를 서버에 저장
     const now = new Date().toISOString()
     const { error } = await supa.from('trips_data').upsert({
       user_id: currentUser.id,
-      data: trips,
+      data: toSave,
       updated_at: now
     })
     if (!error) {
       localStorage.setItem('mt_trips_saved_at', String(new Date(now).getTime()))
       updateSyncTime()
+      // 병합으로 데이터가 바뀌었으면 화면 갱신
+      if (toSave !== trips && typeof renderPage === 'function') {
+        try { renderPage() } catch {}
+      }
       return true
     } else {
       console.error('서버 동기화 실패:', error)
@@ -3690,12 +3832,12 @@ let autoSaveTimer = null
 function startAutoSave() {
   if (autoSaveTimer) clearInterval(autoSaveTimer)
   autoSaveTimer = setInterval(async () => {
+    if (state.isShareSession) return  // 🔒 공유 세션 차단
     if (!currentUser || !supa) return
-    const ok = await syncToSupabase(DB.trips)  // alert 옵션 없이
+    const ok = await syncToSupabase(DB.trips)
     if (ok) {
       console.log('자동 저장 완료', new Date().toLocaleTimeString())
     } else {
-      // 실패 시 5분 쿨다운으로 한 번만 경고
       const lastWarn = parseInt(sessionStorage.getItem('mt_autosave_warned') || '0', 10)
       if (Date.now() - lastWarn > 5 * 60 * 1000) {
         sessionStorage.setItem('mt_autosave_warned', String(Date.now()))
@@ -3705,8 +3847,9 @@ function startAutoSave() {
   }, 30 * 60 * 1000)
 }
 
-// 탭 복귀 시 서버 최신 데이터 조용히 확인 (충돌 없는 경우만 자동 반영)
+// 탭 복귀 시 서버 최신 데이터 조용히 확인
 document.addEventListener('visibilitychange', async () => {
+  if (state.isShareSession) return  // 🔒 공유 세션 차단
   if (document.visibilityState !== 'visible' || !currentUser || !supa) return
   try {
     const { data } = await supa.from('trips_data')
@@ -3717,7 +3860,6 @@ document.addEventListener('visibilitychange', async () => {
     const serverTime = data.updated_at ? new Date(data.updated_at).getTime() : 0
     const localTime = parseInt(localStorage.getItem('mt_trips_saved_at') || '0', 10)
     if (serverTime > localTime) {
-      // 서버가 더 최신 → 조용히 업데이트
       await loadFromSupabase()
       renderPage()
     }
@@ -3778,6 +3920,35 @@ document.addEventListener('click', () => {
   const menu = document.getElementById('profile-menu')
   if (menu) menu.style.display = 'none'
 })
+// 직전 데이터로 되돌리기 — 사고 복구용
+document.getElementById('restore-prev-btn')?.addEventListener('click', async () => {
+  const prev = localStorage.getItem('mt_trips_prev')
+  if (!prev || prev === '[]') {
+    alert('되돌릴 직전 데이터가 없어요.')
+    return
+  }
+  try {
+    const prevTrips = JSON.parse(prev)
+    const cur = JSON.parse(localStorage.getItem('mt_trips') || '[]')
+    const ok = confirm(
+      `직전 데이터로 되돌릴까요?\n\n` +
+      `현재: 여행 ${cur.length}개\n` +
+      `직전: 여행 ${prevTrips.length}개\n\n` +
+      `[확인] 직전 데이터로 복구`
+    )
+    if (!ok) return
+    // 현재를 다시 백업으로 (되돌리기 취소 가능하게 swap)
+    localStorage.setItem('mt_trips_prev', JSON.stringify(cur))
+    localStorage.setItem('mt_trips', JSON.stringify(prevTrips))
+    localStorage.setItem('mt_trips_saved_at', String(Date.now()))
+    if (currentUser && supa && !state.isShareSession) await syncToSupabase(prevTrips)
+    alert('직전 데이터로 되돌렸어요.')
+    location.reload()
+  } catch (e) {
+    alert('복구 실패: ' + e.message)
+  }
+})
+
 document.getElementById('logout-btn')?.addEventListener('click', async () => {
   await supa?.auth.signOut()
   currentUser = null
@@ -4005,35 +4176,31 @@ async function initShareView() {
   const shareId = params.get('share')
   if (!shareId || !supa) return false
   try {
-    // mode 컬럼이 있을 수도 없을 수도 있으니 trip_data만 확실히 select
     const { data, error } = await supa.from('shared_trips').select('trip_data, mode').eq('share_id', shareId).maybeSingle()
+    let tripData = null, isCollab = false
     if (error || !data) {
-      // mode 컬럼 없는 경우 폴백
       const { data: data2, error: error2 } = await supa.from('shared_trips').select('trip_data').eq('share_id', shareId).maybeSingle()
       if (error2 || !data2) { alert('공유 링크를 찾을 수 없거나 만료되었어요.'); return false }
-      state.shareMode = true
-      state.shareData = data2.trip_data
-      state.tripId = data2.trip_data.id
-      state.page = 'p2'
-      return true
+      tripData = data2.trip_data
+      isCollab = shareId.startsWith('c')
+    } else {
+      tripData = data.trip_data
+      isCollab = data.mode === 'collab' || shareId.startsWith('c')
     }
 
-    // collabId는 'c'로 시작, shareId는 's'로 시작 — prefix로도 구분 가능
-    const isCollab = data.mode === 'collab' || shareId.startsWith('c')
+    // ⚠️ 공유 모드는 localStorage(mt_trips)를 절대 건드리지 않음 — 본인 데이터 보호
+    // 별도 격리 저장소(shareTrips)에만 보관
+    window.__shareTrips = [tripData]
     state.shareMode = !isCollab
-    state.shareData = data.trip_data
-    state.tripId = data.trip_data.id
+    state.shareData = tripData
+    state.tripId = tripData.id
     state.page = 'p2'
+    state.isShareSession = true  // 공유 세션 플래그
 
     if (isCollab) {
       collabShareId = shareId
-      const existing = JSON.parse(localStorage.getItem('mt_trips') || '[]')
-      const idx = existing.findIndex(t => t.id === data.trip_data.id)
-      if (idx >= 0) existing[idx] = data.trip_data
-      else existing.unshift(data.trip_data)
-      localStorage.setItem('mt_trips', JSON.stringify(existing))
 
-      // Realtime 구독
+      // Realtime 구독 — DB.save/trips가 isShareSession 플래그로 격리 처리됨
       collabChannel = supa.channel('collab:' + shareId)
         .on('postgres_changes', {
           event: 'UPDATE', schema: 'public', table: 'shared_trips',
@@ -4041,23 +4208,12 @@ async function initShareView() {
         }, payload => {
           if (!payload.new || !payload.new.trip_data) return
           const updated = payload.new.trip_data
-          const list = JSON.parse(localStorage.getItem('mt_trips') || '[]')
-          const i = list.findIndex(t => t.id === updated.id)
-          if (i >= 0) list[i] = updated
-          localStorage.setItem('mt_trips', JSON.stringify(list))
+          window.__shareTrips = [updated]
           state.shareData = updated
           renderPage()
         })
         .subscribe()
 
-      // collab 저장 훅
-      const origSave = DB.save.bind(DB)
-      DB.save = function(t) {
-        origSave(t)
-        pushCollabData()
-      }
-
-      // 상단 배지
       document.querySelector('.share-mode-badge')?.remove?.()
       const badge = document.createElement('span')
       badge.style.cssText = 'font-size:9px;letter-spacing:.1em;text-transform:uppercase;border:1px solid #000;padding:4px 8px;color:#000;background:#fffbe6'
