@@ -1105,7 +1105,7 @@ function renderP2() {
 
   renderP2Hotels(trip)
   renderP2Flights(trip)
-  backfillFlightFlags(trip.id)
+  // backfillFlightFlags 제거 (Geocoding API 과금 원인)
 
   // 이동 요약 토글이 열려있으면 같이 갱신
   const summaryBody = document.getElementById('transport-summary-body')
@@ -1282,7 +1282,7 @@ function renderP3() {
 
   renderPlaces()
   renderDayMinimap()
-  backfillPlaceIds(state.tripId, state.dayId)
+  // backfillPlaceIds 제거 (Places API 과금 원인)
 
   const btn = document.getElementById('place-btn')
   const inp = document.getElementById('place-in')
