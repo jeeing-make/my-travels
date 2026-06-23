@@ -809,13 +809,21 @@ function cleanName(name) {
 
 // 제목이 카드 폭을 넘으면 폰트를 줄여서 맞춤
 function fitCardTitles() {
-  document.querySelectorAll('.tw1,.tw2,.tw3').forEach(el => {
-    el.style.fontSize = ''
+  // 카드별로 tw1/tw2/tw3을 같은 폰트 크기로 통일 (가장 긴 줄 기준)
+  document.querySelectorAll('.tcard-body').forEach(body => {
+    const lines = body.querySelectorAll('.tw1,.tw2,.tw3')
+    if (!lines.length) return
+    // 리셋
+    lines.forEach(el => el.style.fontSize = '')
+    let size = parseFloat(getComputedStyle(lines[0]).fontSize)
     let guard = 0
-    while (el.scrollWidth > el.clientWidth + 1 && guard < 40) {
-      const cur = parseFloat(getComputedStyle(el).fontSize)
-      if (cur <= 14) break
-      el.style.fontSize = (cur - 1) + 'px'
+    // 한 줄이라도 넘치면 전체 폰트를 1px씩 같이 줄임
+    while (guard < 60) {
+      let overflow = false
+      lines.forEach(el => { if (el.scrollWidth > el.clientWidth + 1) overflow = true })
+      if (!overflow || size <= 14) break
+      size -= 1
+      lines.forEach(el => el.style.fontSize = size + 'px')
       guard++
     }
   })
@@ -995,8 +1003,12 @@ function renderP1() {
   addCard.onclick = () => openTripModal(null)
   grid.appendChild(addCard)
 
-  // 제목이 카드 폭 넘으면 폰트 자동 축소
-  requestAnimationFrame(fitCardTitles)
+  // 제목이 카드 폭 넘으면 폰트 자동 축소 (레이아웃 확정 후)
+  requestAnimationFrame(() => requestAnimationFrame(fitCardTitles))
+  // 사진 로드 후 레이아웃 바뀌면 재측정
+  grid.querySelectorAll('img').forEach(img => {
+    if (!img.complete) img.addEventListener('load', () => fitCardTitles(), { once: true })
+  })
 }
 
 /* =========================================================
@@ -2515,6 +2527,12 @@ function setupPlaceDrag(item, handle, placeId) {
 }
 
 function renderPlaces() {
+  // 메모 입력 중이면 리렌더 연기 (커서/입력 보호) — 편집 끝나면 다시 그림
+  if (window.__editingMemo) {
+    clearTimeout(window.__renderPlacesPending)
+    window.__renderPlacesPending = setTimeout(renderPlaces, 600)
+    return
+  }
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
   const day = (trip.days || []).find(d => d.id === state.dayId)
@@ -2673,9 +2691,24 @@ function renderPlaces() {
     // 드래그 핸들 — 꾹 눌러서 순서 변경
     const handle = item.querySelector('.draghandle')
     if (handle) setupPlaceDrag(item, handle, place.id)
-    item.querySelector('textarea').onchange = e => {
-      DB.updatePlace(state.tripId, state.dayId, place.id, { memo: e.target.value })
-    }
+    const memoEl = item.querySelector('textarea')
+    memoEl.addEventListener('focus', () => { window.__editingMemo = true })
+    memoEl.addEventListener('blur', () => {
+      window.__editingMemo = false
+      DB.updatePlace(state.tripId, state.dayId, place.id, { memo: memoEl.value })
+    })
+    memoEl.addEventListener('input', () => {
+      // 입력 즉시 로컬에만 저장 (리렌더 안 함 — 커서 유지)
+      const list = DB.rawTrips
+      const t = list.find(x => x.id === state.tripId)
+      const d = t?.days.find(x => x.id === state.dayId)
+      const p = d?.places.find(x => x.id === place.id)
+      if (p) {
+        p.memo = memoEl.value
+        p._updatedAt = Date.now()
+        try { localStorage.setItem('mt_trips', JSON.stringify(list)) } catch {}
+      }
+    })
 
     // 바우처 링크 추가 버튼
     const voucherAddBtn = item.querySelector('.pvoucher-add')
