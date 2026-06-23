@@ -1294,6 +1294,10 @@ function renderP3() {
 let minimapCurrentCity = 0
 let minimapCities = []
 
+// Geocoding API 중복 호출 방지 캐시 (세션 내 유지)
+const _backfilledPlaceIds = new Set()   // 'tripId:dayId:placeId' — placeId 백필 완료
+const _backfilledFlightFlags = new Set() // 'tripId' — 교통편 국기 백필 완료
+
 function renderDayMinimap() {
   const toggleEl = document.getElementById('day-minimap-toggle')
   const mapEl = document.getElementById('day-minimap')
@@ -1484,6 +1488,7 @@ function loadCityMap(idx) {
   img.src = url
   img.onerror = () => {
     img.onerror = null
+    console.error('[미니맵] Static Maps 로드 실패. URL:', url)
     inner.innerHTML = `<div style="height:200px;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:10px">지도를 불러올 수 없어요</div>`
   }
   inner.style.cursor = 'pointer'
@@ -1544,24 +1549,28 @@ async function backfillPlaceIds(tripId, dayId) {
   const day = (trip.days || []).find(d => d.id === dayId)
   if (!day) return
 
-  const targets = (day.places || []).filter(p =>
-    p.category !== 'transport' && p.lat != null && !p.placeId
-  )
+  // 이 세션에서 아직 처리 안 한 장소만 (캐시로 중복 Geocoding 방지)
+  const targets = (day.places || []).filter(p => {
+    if (p.category === 'transport' || p.lat == null) return false
+    if (p.placeId) return false
+    const key = `${tripId}:${dayId}:${p.id}`
+    if (_backfilledPlaceIds.has(key)) return false
+    return true
+  })
   if (!targets.length) return
 
   for (const place of targets) {
-    // 현재 tripId/dayId와 여전히 같은 페이지인지 확인 (페이지 이동 시 중단)
     if (state.tripId !== tripId || state.dayId !== dayId) return
+    const key = `${tripId}:${dayId}:${place.id}`
+    _backfilledPlaceIds.add(key) // 실패해도 재시도 안 함 (과금 방지)
     try {
       const detail = await queryPlacesNearby(place.name, { lat: place.lat, lng: place.lng })
       if (detail && detail.placeId) {
         DB.updatePlace(tripId, dayId, place.id, { placeId: detail.placeId })
-        // 지도 아이콘 링크 즉시 갱신
         const anchor = document.querySelector(`.pmap-link[data-pid="${place.id}"]`)
         if (anchor) anchor.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&query_place_id=${detail.placeId}`
       }
     } catch (e) { /* 개별 실패는 조용히 무시 */ }
-    // API 과호출 방지: 장소 간 300ms 간격
     await new Promise(r => setTimeout(r, 300))
   }
 }
@@ -1722,14 +1731,22 @@ function renderP3IfActive() {
 // 기존 교통편 국기 백필 — depLat/arrLat 있고 _depFlag/_arrFlag 없는 것만
 async function backfillFlightFlags(tripId) {
   if (typeof google === 'undefined' || !google.maps) return
+  // 이 세션에서 이미 처리한 trip은 스킵 (중복 Geocoding 방지)
+  if (_backfilledFlightFlags.has(tripId)) return
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
   if (!t) return
+
+  // 처리할 항목이 없으면 캐시 등록하고 종료
+  const needsDep = (t.flights || []).filter(f => !f._depFlag && f.depLat != null)
+  const needsArr = (t.flights || []).filter(f => !f._arrFlag && f.arrLat != null)
+  if (!needsDep.length && !needsArr.length) { _backfilledFlightFlags.add(tripId); return }
+
+  _backfilledFlightFlags.add(tripId) // 실패해도 재시도 안 함 (과금 방지)
   const geocoder = new google.maps.Geocoder()
   let changed = false
 
   for (const f of (t.flights || [])) {
-    // dep 국기 없으면 채우기
     if (!f._depFlag && f.depLat != null) {
       try {
         const result = await new Promise(resolve =>
@@ -1742,7 +1759,6 @@ async function backfillFlightFlags(tripId) {
       } catch (e) {}
       await new Promise(r => setTimeout(r, 150))
     }
-    // arr 국기 없으면 채우기
     if (!f._arrFlag && f.arrLat != null) {
       try {
         const result = await new Promise(resolve =>
@@ -4209,10 +4225,37 @@ setInterval(() => { if (currentUser) updateSyncTime() }, 60000)
 
 async function initAuth() {
   if (!supa) return
+
+  // onAuthStateChange: 토큰 자동 갱신·로그인·로그아웃 이벤트 모두 처리
+  supa.auth.onAuthStateChange(async (event, session) => {
+    if (state.isShareSession) return  // 공유 세션 중엔 무시
+    if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+      if (!session) return
+      const wasLoggedIn = !!currentUser
+      currentUser = session.user
+      supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
+        .then(({ error }) => { if (error) console.warn('allowed_users 등록 경고:', error.message) })
+      if (!wasLoggedIn) {
+        // 처음 로그인(새로고침 포함) — 데이터 로드 후 렌더
+        await loadFromSupabase()
+        updateAuthUI()
+        renderPage()
+        startAutoSave()
+      } else {
+        // 토큰 갱신만 — UI 재렌더 불필요
+        updateAuthUI()
+      }
+    } else if (event === 'SIGNED_OUT') {
+      currentUser = null
+      updateAuthUI()
+      renderPage()
+    }
+  })
+
+  // 현재 세션 체크 (onAuthStateChange가 INITIAL_SESSION 이벤트를 늦게 줄 수 있어서 직접 확인)
   const { data } = await supa.auth.getSession()
-  if (data.session) {
+  if (data.session && !currentUser) {
     currentUser = data.session.user
-    // 저장 권한 등록 (실패해도 조용히 — 실제 저장 실패 시에만 경고)
     supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
       .then(({ error }) => { if (error) console.warn('allowed_users 등록 경고:', error.message) })
     await loadFromSupabase()
