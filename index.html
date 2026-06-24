@@ -714,8 +714,14 @@ const DB = {
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
     if (!day) return
-    const p = day.places.find(x => x.id === placeId)
-    if (p) { p._deleted = Date.now(); p._updatedAt = Date.now() }
+    const idx = day.places.findIndex(x => x.id === placeId)
+    if (idx >= 0) {
+      day.places[idx]._deleted = Date.now()
+      day.places[idx]._updatedAt = Date.now()
+      // 삭제 위치 다음 카드 dir 초기화 (이전카드→다음카드 경로 재계산 필요)
+      const next = day.places.filter(x => !x._deleted)[day.places.filter(x => !x._deleted).findIndex(x => x.id === placeId) + 1]
+      if (next) { delete next.dirMode; delete next.dirDuration; delete next.dirDistance }
+    }
     this.save(list)
   },
   movePlace(tripId, dayId, placeId, dir) {
@@ -728,8 +734,12 @@ const DB = {
     const j = i + dir
     if (i < 0 || j < 0 || j >= day.places.length) return
     const arr = day.places
+    // 영향받는 카드만 dir 초기화 (i, j 및 그 다음 카드)
+    const affectedIds = new Set([arr[i].id, arr[j].id])
+    if (i + 1 < arr.length && arr[i+1].id !== arr[j].id) affectedIds.add(arr[i+1].id)
+    if (j + 1 < arr.length) affectedIds.add(arr[j+1].id)
     ;[arr[i], arr[j]] = [arr[j], arr[i]]
-    arr.forEach(p => { delete p.dirMode; delete p.dirDuration; delete p.dirDistance })
+    arr.forEach(p => { if (affectedIds.has(p.id)) { delete p.dirMode; delete p.dirDuration; delete p.dirDistance } })
     this.save(list)
   },
 
@@ -743,9 +753,25 @@ const DB = {
     const arr = day.places
     const from = arr.findIndex(p => p.id === placeId)
     if (from < 0 || toIndex < 0 || toIndex >= arr.length || from === toIndex) return
+
+    // 영향받는 인덱스: 원래위치 다음 카드 + 새위치 및 그 다음 카드
+    const affected = new Set()
+    if (from + 1 < arr.length) affected.add(arr[from + 1].id) // 원래위치 다음 (A→X 경로 사라짐)
+    if (from > 0) affected.add(arr[from].id) // 원래위치 카드 자체 (이전→X 경로)
+    // 이동 후 위치 기준 (splice 전 arr 기준으로 toIndex 이후 카드)
+    const toNext = arr[toIndex] ? arr[toIndex].id : null
+    if (toNext) affected.add(toNext)
+    affected.add(placeId) // 이동한 카드 자체의 dir (앞 카드→이동카드 경로)
+
     const [moved] = arr.splice(from, 1)
     arr.splice(toIndex, 0, moved)
-    arr.forEach(p => { delete p.dirMode; delete p.dirDuration; delete p.dirDistance })
+
+    // 영향받는 카드만 dir 초기화
+    arr.forEach(p => {
+      if (affected.has(p.id)) {
+        delete p.dirMode; delete p.dirDuration; delete p.dirDistance
+      }
+    })
     this.save(list)
   }
 }
@@ -1301,6 +1327,7 @@ let minimapCities = []
 // Geocoding API 중복 호출 방지 캐시 (세션 내 유지)
 const _backfilledPlaceIds = new Set()   // 'tripId:dayId:placeId' — placeId 백필 완료
 const _backfilledFlightFlags = new Set() // 'tripId' — 교통편 국기 백필 완료
+const _calcDirCache = new Set()          // 'fromLat,fromLng->toLat,toLng' — 세션 내 중복 Directions 방지
 
 function renderDayMinimap() {
   const toggleEl = document.getElementById('day-minimap-toggle')
@@ -1325,15 +1352,25 @@ function renderDayMinimap() {
   const newToggle = toggleEl.cloneNode(true)
   toggleEl.parentNode.replaceChild(newToggle, toggleEl)
 
+  // 토글 열림 상태 복원
+  if (window.__minimapOpen) {
+    mapEl.style.display = 'block'
+    const arrow = document.getElementById('minimap-arrow')
+    if (arrow) arrow.textContent = '▴'
+    requestAnimationFrame(() => buildCityMaps())
+  }
+
   newToggle.addEventListener('click', () => {
     const isOpen = mapEl.style.display !== 'none'
     const arrow = document.getElementById('minimap-arrow')
     if (isOpen) {
       mapEl.style.display = 'none'
       if (arrow) arrow.textContent = '▾'
+      window.__minimapOpen = false
     } else {
       mapEl.style.display = 'block'
       if (arrow) arrow.textContent = '▴'
+      window.__minimapOpen = true
       requestAnimationFrame(() => buildCityMaps())
     }
   })
@@ -2301,9 +2338,8 @@ function createDirBar(from, to, dirInfo, onResolved, label, countryCode) {
   const hasCoords = (from.lat != null && from.lng != null && to.lat != null && to.lng != null)
   const labelTxt = label ? `${label} ` : ''
 
-  const distVal = dirInfo.dirDistance ? parseFloat(dirInfo.dirDistance.replace(/[^0-9.]/g, '')) : null
-  const isLongWalk = dirInfo.dirMode === 'walking' && dirInfo.dirDistance && dirInfo.dirDistance.includes('km') && distVal > 2
-  const needsRecalc = !dirInfo.dirDuration || dirInfo.dirDuration === '정보 없음' || isLongWalk
+  // DB에 저장된 값 있으면 재계산 안 함 — 장소 추가/변경 시에만 호출됨
+  const needsRecalc = !dirInfo.dirDuration || dirInfo.dirDuration === '정보 없음'
 
   if (needsRecalc && hasCoords && typeof google !== 'undefined' && google.maps) {
     bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
@@ -2435,21 +2471,47 @@ function setupPlaceDrag(item, handle, placeId) {
     dragState.item.style.opacity = '0.85'
     dragState.item.style.boxShadow = '0 6px 20px rgba(0,0,0,.18)'
 
-    // 현재 위치에서 가장 가까운 카드 찾기
     const draggingRect = dragState.item.getBoundingClientRect()
     const draggingMid = draggingRect.top + draggingRect.height / 2
 
+    // 삽입 위치 계산 (endDrag와 동일 로직)
+    let insertBefore = null // null = 맨 아래
+    let insertAfterLast = true
     dragState.items.forEach(other => {
       if (other === dragState.item) return
-      other.style.transition = 'transform .15s'
       const r = other.getBoundingClientRect()
       const mid = r.top + r.height / 2
-      // 시각적 빈자리 힌트
-      if (draggingMid > r.top && draggingMid < r.bottom) {
-        other.style.background = '#f5f5f5'
-      } else {
-        other.style.background = ''
+      if (draggingMid < mid && insertBefore === null) {
+        insertBefore = other
+        insertAfterLast = false
       }
+    })
+
+    // 인디케이터 선 표시
+    let indicator = document.getElementById('drag-indicator')
+    if (!indicator) {
+      indicator = document.createElement('div')
+      indicator.id = 'drag-indicator'
+      indicator.style.cssText = 'position:fixed;left:0;right:0;height:2px;background:#000;z-index:9999;pointer-events:none;transition:top .08s'
+      document.body.appendChild(indicator)
+    }
+    if (insertBefore) {
+      const r = insertBefore.getBoundingClientRect()
+      indicator.style.top = (r.top - 1) + 'px'
+      indicator.style.display = 'block'
+    } else {
+      // 맨 아래 — 마지막 아이템 하단
+      const nonDragging = dragState.items.filter(el => el !== dragState.item)
+      if (nonDragging.length) {
+        const last = nonDragging[nonDragging.length - 1].getBoundingClientRect()
+        indicator.style.top = (last.bottom - 1) + 'px'
+        indicator.style.display = 'block'
+      }
+    }
+
+    dragState.items.forEach(other => {
+      if (other === dragState.item) return
+      other.style.background = ''
     })
   }
 
@@ -2466,29 +2528,32 @@ function setupPlaceDrag(item, handle, placeId) {
     const draggingRect = ds.item.getBoundingClientRect()
     const draggingMid = draggingRect.top + draggingRect.height / 2
 
-    let targetIndex = -1
-    ds.items.forEach((other, idx) => {
+    // moveDrag와 동일한 insertBefore 로직
+    let insertBefore = null
+    ds.items.forEach(other => {
       if (other === ds.item) return
       const r = other.getBoundingClientRect()
       const mid = r.top + r.height / 2
-      if (draggingMid > mid) targetIndex = idx
+      if (draggingMid < mid && insertBefore === null) insertBefore = other
     })
 
     cleanup(ds)
 
-    // DOM 인덱스 → 실제 places 인덱스 매핑
     const domOrder = ds.items.map(el => el.dataset.placeId)
-    if (targetIndex >= 0 && targetIndex < domOrder.length) {
-      const targetPlaceId = domOrder[targetIndex]
+    const dragIdx = domOrder.indexOf(ds.placeId)
+    if (insertBefore) {
+      const targetPlaceId = insertBefore.dataset.placeId
       const places = day.places
-      const toIdx = places.findIndex(p => p.id === targetPlaceId)
+      let toIdx = places.findIndex(p => p.id === targetPlaceId)
       if (toIdx >= 0) {
+        if (dragIdx < toIdx) toIdx-- // 자기 자신 제거 후 인덱스 보정
         DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, toIdx)
       }
-    } else if (targetIndex < 0) {
-      // 맨 위로
-      DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, 0)
+    } else {
+      // 맨 아래로
+      DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, day.places.length - 1)
     }
+    _calcDirCache.clear() // 순서 변경 시 경로 재계산
     renderPlaces()
   }
 
@@ -2501,7 +2566,9 @@ function setupPlaceDrag(item, handle, placeId) {
     ds.item.style.zIndex = ''
     ds.item.style.userSelect = ''
     ds.items.forEach(el => { el.style.background = ''; el.style.transition = '' })
-    document.body.style.userSelect = ''  // 혹시 남아있으면 해제
+    document.body.style.userSelect = ''
+    const indicator = document.getElementById('drag-indicator')
+    if (indicator) indicator.remove()
   }
 
   // ── 마우스 (PC) ──
@@ -2662,6 +2729,7 @@ function renderPlaces() {
           DB.save(list)
         }
         DB.deletePlace(state.tripId, state.dayId, place.id)
+        _calcDirCache.clear() // 장소 삭제 시 경로 재계산
         renderPlaces()
       }
       list.appendChild(card)
@@ -2989,6 +3057,7 @@ async function savePlaceByCoords(coords) {
   } catch (e) {}
 
   DB.addPlace(state.tripId, state.dayId, place)
+  _calcDirCache.clear() // 장소 추가 시 경로 재계산
   renderPlaces()
   renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
 }
@@ -3033,6 +3102,7 @@ async function savePlace(nameOrId, coords) {
     console.warn('Directions 계산 실패:', e)
   }
   DB.addPlace(state.tripId, state.dayId, place)
+  _calcDirCache.clear()
   renderPlaces()
   renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
 }
@@ -3348,6 +3418,9 @@ async function calcDirKorea(origin, dest) {
 }
 
 function calcDir(origin, dest) {
+  const cacheKey = `${origin.lat},${origin.lng}->${dest.lat},${dest.lng}`
+  if (_calcDirCache.has(cacheKey)) return Promise.resolve(null) // 세션 내 중복 호출 차단
+  _calcDirCache.add(cacheKey)
   return new Promise(resolve => {
     let done = false
     const finish = v => { if (!done) { done = true; resolve(v) } }
