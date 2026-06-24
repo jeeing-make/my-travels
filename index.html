@@ -1297,12 +1297,10 @@ async function renderP4() {
 
   const body = document.getElementById('p4-body')
   body.innerHTML = '<div style="text-align:center;padding:40px;color:#aaa">집계 중...</div>'
-
   document.getElementById('p4-back').onclick = () => go('p2', { tripId: state.tripId })
 
-  // 모든 장소에서 금액 수집
   const days = (trip.days || []).filter(d => !d._deleted)
-  const entries = [] // { date, dayLabel, placeName, category, cost, currency, krw }
+  const entries = []
 
   for (const day of days) {
     const places = (day.places || []).filter(p => !p._deleted && p.category !== 'transport' && p.cost > 0)
@@ -1313,19 +1311,12 @@ async function renderP4() {
         const rate = await getFxRateToKRW(cur)
         krw = rate ? Math.round(p.cost * rate) : 0
       }
-      entries.push({ date: day.date || '', dayLabel: day.date || '날짜 미정', placeName: p.name, category: p.category || 'attraction', cost: p.cost, currency: cur, krw })
+      entries.push({ date: day.date || '', placeName: p.name, category: p.category || 'attraction', cost: p.cost, currency: cur, krw })
     }
   }
 
   const totalKRW = entries.reduce((s, e) => s + e.krw, 0)
-
-  // 날짜별 합산
-  const byDay = {}
-  entries.forEach(e => {
-    if (!byDay[e.date]) byDay[e.date] = { label: e.dayLabel, total: 0, items: [] }
-    byDay[e.date].total += e.krw
-    byDay[e.date].items.push(e)
-  })
+  const fmt = n => Math.round(n).toLocaleString() + '원'
 
   // 카테고리별 합산
   const byCat = {}
@@ -1334,64 +1325,78 @@ async function renderP4() {
     byCat[e.category].total += e.krw
     byCat[e.category].items.push(e)
   })
+  const catsSorted = Object.entries(byCat).sort(([,a],[,b]) => b.total - a.total)
+  const topCat = catsSorted[0] ? (CAT[catsSorted[0][0]]?.l || catsSorted[0][0]) : null
+  const maxCat = catsSorted[0] ? catsSorted[0][1].total : 1
 
-  const fmt = n => '₩' + Math.round(n).toLocaleString()
-  const barColor = '#222'
-  const maxDay = Math.max(...Object.values(byDay).map(d => d.total), 1)
-  const maxCat = Math.max(...Object.values(byCat).map(c => c.total), 1)
+  // 날짜별 합산
+  const byDay = {}
+  entries.forEach(e => {
+    if (!byDay[e.date]) byDay[e.date] = { total: 0, items: [] }
+    byDay[e.date].total += e.krw
+    byDay[e.date].items.push(e)
+  })
 
-  // 날짜별 그래프 HTML
-  const dayBars = Object.entries(byDay).sort(([a],[b]) => a.localeCompare(b)).map(([date, d]) => {
-    const pct = Math.round(d.total / maxDay * 100)
-    const itemsHtml = d.items.map(e => `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px">
-        <span>${CAT[e.category]?.e || '📍'} ${e.placeName}</span>
-        <span style="color:#555">${e.cost.toLocaleString()} ${e.currency} <span style="color:#aaa;font-size:11px">(${fmt(e.krw)})</span></span>
-      </div>`).join('')
-    return `
-      <div class="p4-bar-row" data-key="day-${date}">
-        <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleP4Detail('day-${date}')">
-          <div style="font-size:12px;color:#888;width:72px;flex-shrink:0">${date || '미정'}</div>
-          <div style="flex:1;background:#f0f0f0;border-radius:3px;height:18px;overflow:hidden">
-            <div style="width:${pct}%;background:${barColor};height:100%;border-radius:3px;transition:width .3s"></div>
-          </div>
-          <div style="font-size:12px;font-weight:600;width:90px;text-align:right;flex-shrink:0">${fmt(d.total)}</div>
-        </div>
-        <div id="p4-detail-day-${date}" style="display:none;margin:8px 0 4px 80px">${itemsHtml}</div>
-      </div>`
-  }).join('')
-
-  // 카테고리별 그래프 HTML
-  const catBars = Object.entries(byCat).sort(([,a],[,b]) => b.total - a.total).map(([cat, c]) => {
+  const catRows = catsSorted.map(([cat, c]) => {
     const pct = Math.round(c.total / maxCat * 100)
-    const itemsHtml = c.items.map(e => `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px">
-        <span style="color:#888;font-size:11px">${e.date}</span>
-        <span>${e.placeName}</span>
-        <span style="color:#555">${e.cost.toLocaleString()} ${e.currency} <span style="color:#aaa;font-size:11px">(${fmt(e.krw)})</span></span>
+    const info = CAT[cat] || { e: '📍', l: cat }
+    const itemsHtml = c.items.sort((a,b) => b.krw - a.krw).map(e => `
+      <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f5f5f5;font-size:13px">
+        <span style="color:#555">${e.date ? e.date.slice(5) : ''} &nbsp;${e.placeName}</span>
+        <span style="font-weight:500;white-space:nowrap;margin-left:12px">${e.cost.toLocaleString()} ${e.currency !== 'KRW' ? '<span style="color:#aaa;font-size:11px">('+fmt(e.krw)+')</span>' : '원'}</span>
       </div>`).join('')
     return `
-      <div class="p4-bar-row" data-key="cat-${cat}">
-        <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleP4Detail('cat-${cat}')">
-          <div style="font-size:12px;color:#888;width:72px;flex-shrink:0">${CAT[cat]?.e || '📍'} ${CAT[cat]?.l || cat}</div>
-          <div style="flex:1;background:#f0f0f0;border-radius:3px;height:18px;overflow:hidden">
-            <div style="width:${pct}%;background:${barColor};height:100%;border-radius:3px;transition:width .3s"></div>
+      <div style="border-bottom:1px solid #eee;padding:14px 0">
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="toggleP4Detail('cat-${cat}')">
+          <div style="font-size:22px;width:32px;text-align:center">${info.e}</div>
+          <div style="flex:1">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
+              <span style="font-size:14px;font-weight:600">${info.l} <span style="font-size:11px;color:#aaa;font-weight:400">›</span></span>
+              <span style="font-size:14px;font-weight:700">${fmt(c.total)}</span>
+            </div>
+            <div style="background:#eee;border-radius:2px;height:4px;overflow:hidden">
+              <div style="width:${pct}%;background:#111;height:100%;border-radius:2px"></div>
+            </div>
           </div>
-          <div style="font-size:12px;font-weight:600;width:90px;text-align:right;flex-shrink:0">${fmt(c.total)}</div>
         </div>
-        <div id="p4-detail-cat-${cat}" style="display:none;margin:8px 0 4px 80px">${itemsHtml}</div>
+        <div id="p4-detail-cat-${cat}" style="display:none;margin-top:8px;padding-left:42px">${itemsHtml}</div>
       </div>`
   }).join('')
 
-  body.innerHTML = `
-    <div style="font-size:11px;color:#aaa;letter-spacing:.08em;margin-bottom:4px">TOTAL</div>
-    <div style="font-size:32px;font-weight:800;letter-spacing:-.02em;margin-bottom:24px">${fmt(totalKRW)}</div>
+  const dayRows = Object.entries(byDay).sort(([a],[b]) => a.localeCompare(b)).map(([date, d]) => {
+    const itemsHtml = d.items.sort((a,b) => b.krw - a.krw).map(e => `
+      <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f5f5f5;font-size:13px">
+        <span>${CAT[e.category]?.e || '📍'} ${e.placeName}</span>
+        <span style="font-weight:500;white-space:nowrap;margin-left:12px">${e.cost.toLocaleString()} ${e.currency !== 'KRW' ? '<span style="color:#aaa;font-size:11px">('+fmt(e.krw)+')</span>' : '원'}</span>
+      </div>`).join('')
+    return `
+      <div style="border-bottom:1px solid #eee;padding:10px 0">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleP4Detail('day-${date}')">
+          <span style="font-size:13px;color:#555">${date || '날짜 미정'}</span>
+          <span style="font-size:13px;font-weight:600">${fmt(d.total)} <span style="color:#aaa;font-size:11px">›</span></span>
+        </div>
+        <div id="p4-detail-day-${date}" style="display:none;margin-top:8px">${itemsHtml}</div>
+      </div>`
+  }).join('')
 
-    <div style="font-size:11px;color:#aaa;letter-spacing:.08em;margin-bottom:12px">날짜별 지출</div>
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:28px">${dayBars || '<div style="color:#aaa;font-size:13px">금액 입력된 장소가 없어요</div>'}</div>
+  body.innerHTML = entries.length === 0
+    ? '<div style="text-align:center;padding:60px 0;color:#aaa;font-size:14px">금액 입력된 장소가 없어요</div>'
+    : `
+    <div style="padding-bottom:20px;border-bottom:2px solid #111;margin-bottom:4px">
+      <div style="font-size:11px;color:#aaa;letter-spacing:.08em;margin-bottom:6px">총 지출 금액</div>
+      <div style="font-size:34px;font-weight:800;letter-spacing:-.02em">${fmt(totalKRW)}</div>
+    </div>
+    ${topCat ? `<div style="font-size:13px;color:#666;padding:14px 0;border-bottom:1px solid #eee;margin-bottom:4px">${topCat}에서 가장 많이 썼어요.</div>` : ''}
 
-    <div style="font-size:11px;color:#aaa;letter-spacing:.08em;margin-bottom:12px">카테고리별 지출</div>
-    <div style="display:flex;flex-direction:column;gap:10px">${catBars || '<div style="color:#aaa;font-size:13px">금액 입력된 장소가 없어요</div>'}</div>
+    <div style="margin-bottom:8px">${catRows}</div>
+
+    <div style="margin-top:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:12px 0;border-top:2px solid #111" onclick="toggleP4Detail('byday')">
+        <span style="font-size:12px;font-weight:600;letter-spacing:.06em">일자별 금액 보기</span>
+        <span style="font-size:11px;color:#aaa">▾</span>
+      </div>
+      <div id="p4-detail-byday" style="display:none">${dayRows}</div>
+    </div>
   `
 }
 
