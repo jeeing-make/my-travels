@@ -1071,39 +1071,23 @@ async function resolveDayCountryFlag(trip, day) {
   if (typeof google === 'undefined' || !google.maps) return
   const cacheKey = `${trip.id}:${day.id}`
   if (_resolvedCountryFlags.has(cacheKey)) return
+  // 첫 번째 장소 1개만으로 국기 판단 (전체 순회 시 Geocoding 폭탄 방지)
   const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
   if (!places.length) return
-  _resolvedCountryFlags.add(cacheKey)
+  _resolvedCountryFlags.add(cacheKey) // 실패해도 재시도 안 함
   try {
     const geocoder = new google.maps.Geocoder()
-
-    // 모든 장소 좌표로 나라 조회 (중복 제거)
-    const codes = []
-    for (const place of places) {
-      const result = await new Promise(resolve => {
-        geocoder.geocode({ location: { lat: place.lat, lng: place.lng } }, (results, status) => {
-          if (status === 'OK' && results[0]) resolve(results[0])
-          else resolve(null)
-        })
+    const result = await new Promise(resolve => {
+      geocoder.geocode({ location: { lat: places[0].lat, lng: places[0].lng } }, (results, status) => {
+        resolve(status === 'OK' && results[0] ? results[0] : null)
       })
-      if (result) {
-        const c = result.address_components.find(c => c.types.includes('country'))
-        if (c && (!codes.length || codes[codes.length - 1] !== c.short_name)) {
-          codes.push(c.short_name)
-        }
-      }
-      await new Promise(r => setTimeout(r, 150)) // geocode rate limit 방지
-    }
-
-    if (!codes.length) return
-    // 국기 이모지 조합: 단일 나라면 🇨🇿, 여러 나라면 🇨🇿→🇩🇪
-    const flags = codes.map(countryCodeToFlag).filter(Boolean)
-    const flagStr = flags.join(' → ')
-    // countryCode는 첫 번째 나라 기준 (화폐 등에 사용)
-    DB.updateDay(trip.id, day.id, {
-      countryFlag: flagStr,
-      countryCode: codes[0]
     })
+    if (!result) return
+    const c = result.address_components.find(c => c.types.includes('country'))
+    if (!c) return
+    const flag = countryCodeToFlag(c.short_name)
+    if (!flag) return
+    DB.updateDay(trip.id, day.id, { countryFlag: flag, countryCode: c.short_name })
     renderP2()
   } catch (e) { /* ignore */ }
 }
@@ -2613,7 +2597,7 @@ function setupPlaceDrag(item, handle, placeId) {
   const startDrag = (clientY) => {
     const listEl = document.getElementById('p3-places')
     if (!listEl) return
-    const items = Array.from(listEl.querySelectorAll('.pitem[data-place-id]'))
+    const items = Array.from(listEl.querySelectorAll('.pitem[data-place-id], .pitem[data-place_id]')).filter(el => el.dataset.placeId)
     dragState = {
       placeId,
       item,
@@ -2686,11 +2670,10 @@ function setupPlaceDrag(item, handle, placeId) {
     const ds = dragState
     dragState = null
 
-    const trip = DB.getTrip(state.tripId)
-    const day = (trip?.days || []).find(d => d.id === state.dayId)
-    if (!day) { cleanup(ds); return }
+    // 경로 계산 캐시 무효화 (이동 전에)
+    _calcDirResultCache.clear()
 
-    // transform 제거 전 다른 아이템 위치로 insertBefore 계산 (clientY 기준)
+    // insertBefore 계산 — clientY 기준 (transform 영향 없음)
     let insertBefore = null
     ds.items.forEach(other => {
       if (other === ds.item) return
@@ -2699,7 +2682,12 @@ function setupPlaceDrag(item, handle, placeId) {
       if (clientY < mid && insertBefore === null) insertBefore = other
     })
 
-    cleanup(ds)
+    cleanup(ds) // transform 제거
+
+    // 장소 이동 — 경로 계산과 무관하게 항상 실행
+    const trip = DB.getTrip(state.tripId)
+    const day = (trip?.days || []).find(d => d.id === state.dayId)
+    if (!day) { renderPlaces(); return }
 
     const domOrder = ds.items.map(el => el.dataset.placeId)
     const dragIdx = domOrder.indexOf(ds.placeId)
@@ -2714,7 +2702,6 @@ function setupPlaceDrag(item, handle, placeId) {
     } else {
       DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, day.places.length - 1)
     }
-    _calcDirResultCache.clear()
     renderPlaces()
   }
 
@@ -2784,7 +2771,6 @@ function renderPlaces() {
   // 이미 렌더링 중이면 스킵 (경로 계산 콜백에서 재진입 방지)
   if (window.__renderingPlaces) return
   window.__renderingPlaces = true
-  setTimeout(() => { window.__renderingPlaces = false }, 0)
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
   const day = (trip.days || []).find(d => d.id === state.dayId)
@@ -3039,6 +3025,7 @@ function renderPlaces() {
     const hasCoordPlaces = (day3.places || []).some(p => p.category !== 'transport' && p.lat != null)
     if (hasCoordPlaces && !day3.countryFlag) resolveDayCountryFlag(trip3, day3)
   }
+  window.__renderingPlaces = false
 }
 
 /* =========================================================
