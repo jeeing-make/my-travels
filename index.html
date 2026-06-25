@@ -777,14 +777,26 @@ const DB = {
     const [moved] = arr.splice(from, 1)
     arr.splice(toIndex, 0, moved)
 
-    // 영향받는 카드만 dir 초기화
-    arr.forEach(p => {
+    // 영향받는 카드만 dir 초기화 + 캐시 키 삭제
+    // splice 후 arr 기준으로 영향받는 인접 쌍 캐시 삭제
+    arr.forEach((p, i) => {
       if (affected.has(p.id)) {
         delete p.dirMode; delete p.dirDuration; delete p.dirDistance
+        // 이 장소 앞뒤 경로 캐시 삭제
+        const prev = arr[i-1], next = arr[i+1]
+        if (prev && p.lat != null) invalidateDirCache(prev, p)
+        if (next && p.lat != null) invalidateDirCache(p, next)
       }
     })
     this.save(list)
   }
+}
+
+// 특정 장소 쌍의 Directions 캐시 키 삭제 (FAILED 포함)
+function invalidateDirCache(from, to) {
+  if (!from || !to || from.lat == null || to.lat == null) return
+  const key = from.lat+','+from.lng+'->'+to.lat+','+to.lng
+  _calcDirResultCache.delete(key)
 }
 
 /* =========================================================
@@ -2489,14 +2501,30 @@ function createDirBar(from, to, dirInfo, onResolved, label, countryCode) {
   const labelTxt = label ? `${label} ` : ''
 
   // DB에 저장된 값 있으면 재계산 안 함 — 장소 추가/변경 시에만 호출됨
-  const needsRecalc = !dirInfo.dirDuration || dirInfo.dirDuration === '정보 없음'
+  const needsRecalc = !dirInfo.dirDuration
 
   if (needsRecalc && hasCoords && typeof google !== 'undefined' && google.maps) {
     bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
-    const calc = isKorea ? calcDirKorea(from, to) : calcDir(from, to)
-    calc.then(dir => {
-      if (onResolved) onResolved(dir || { mode: 'walking', dur: '정보 없음', dist: '' })
-    })
+
+    function tryCalcDir() {
+      bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
+      const calc = isKorea ? calcDirKorea(from, to) : calcDir(from, to)
+      calc.then(dir => {
+        if (dir) {
+          if (onResolved) onResolved(dir)
+        } else {
+          // 실패 — 재시도 버튼 표시
+          bar.innerHTML = `<div class="dirline"></div><div class="dirtxt" style="color:#aaa">[ ${labelTxt}경로 불러오기 실패 <button onclick="event.stopPropagation();this.closest('.dirbar').__retryDir && this.closest('.dirbar').__retryDir()" style="font-size:11px;padding:1px 6px;border:1px solid #ccc;background:#fff;border-radius:3px;cursor:pointer;margin-left:4px">🔄 재시도</button> ]</div><div class="dirline"></div>`
+          bar.__retryDir = () => {
+            // 캐시에서 FAILED 제거 후 재시도
+            const cacheKey = from.lat+','+from.lng+'->'+to.lat+','+to.lng
+            _calcDirResultCache.delete(cacheKey)
+            tryCalcDir()
+          }
+        }
+      })
+    }
+    tryCalcDir()
   } else {
     const dur = dirInfo.dirDuration || '—'
     const dist = dirInfo.dirDistance ? ` · ${dirInfo.dirDistance}` : ''
@@ -2670,9 +2698,6 @@ function setupPlaceDrag(item, handle, placeId) {
     const ds = dragState
     dragState = null
 
-    // 경로 계산 캐시 무효화 (이동 전에)
-    _calcDirResultCache.clear()
-
     // insertBefore 계산 — clientY 기준 (transform 영향 없음)
     let insertBefore = null
     ds.items.forEach(other => {
@@ -2778,6 +2803,8 @@ function renderPlaces() {
   if (!trip) { window.__renderingPlaces = false; return }
   const day = (trip.days || []).find(d => d.id === state.dayId)
   if (!day) { window.__renderingPlaces = false; return }
+
+
 
   const list = document.getElementById('p3-places')
   list.innerHTML = ''
@@ -2896,8 +2923,20 @@ function renderPlaces() {
           t.flights = (t.flights || []).filter(x => x.id !== place._flightId)
           DB.save(list)
         }
+        // 삭제 전 앞뒤 장소 좌표로 캐시 키 삭제
+        ;(() => {
+          const t_ = DB.getTrip(state.tripId)
+          const d_ = (t_?.days||[]).find(x=>x.id===state.dayId)
+          if (d_) {
+            const arr_ = (d_.places||[]).filter(p=>!p._deleted)
+            const idx_ = arr_.findIndex(p=>p.id===place.id)
+            const prev_ = arr_[idx_-1], next_ = arr_[idx_+1]
+            if (prev_ && next_) invalidateDirCache(prev_, next_) // 앞→뒤 새 경로
+            if (prev_) invalidateDirCache(prev_, place) // 앞→삭제장소
+            if (next_) invalidateDirCache(place, next_) // 삭제장소→뒤
+          }
+        })()
         DB.deletePlace(state.tripId, state.dayId, place.id)
-        _calcDirResultCache.clear() // 장소 삭제 시 경로 재계산
         renderPlaces()
       }
       list.appendChild(card)
@@ -3229,8 +3268,17 @@ async function savePlaceByCoords(coords) {
     }
   } catch (e) {}
 
+  // 추가 전 마지막 장소와의 경로 캐시 삭제
+  ;(() => {
+    const t_ = DB.getTrip(state.tripId)
+    const d_ = (t_?.days||[]).find(x=>x.id===state.dayId)
+    if (d_) {
+      const arr_ = (d_.places||[]).filter(p=>!p._deleted && p.category!=='transport')
+      const prev_ = arr_[arr_.length-1]
+      if (prev_ && place.lat) invalidateDirCache(prev_, place)
+    }
+  })()
   DB.addPlace(state.tripId, state.dayId, place)
-  _calcDirResultCache.clear() // 장소 추가 시 경로 재계산
   renderPlaces()
   renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
 }
@@ -3275,7 +3323,15 @@ async function savePlace(nameOrId, coords) {
     console.warn('Directions 계산 실패:', e)
   }
   DB.addPlace(state.tripId, state.dayId, place)
-  _calcDirResultCache.clear()
+  ;(() => {
+    const t_ = DB.getTrip(state.tripId)
+    const d_ = (t_?.days||[]).find(x=>x.id===state.dayId)
+    if (d_) {
+      const arr_ = (d_.places||[]).filter(p=>!p._deleted && p.category!=='transport')
+      const prev_ = arr_[arr_.length-1]
+      if (prev_ && place.lat) invalidateDirCache(prev_, place)
+    }
+  })()
   renderPlaces()
   renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
 }
@@ -3594,10 +3650,10 @@ async function calcDirKorea(origin, dest) {
 const _calcDirResultCache = new Map()
 function calcDir(origin, dest) {
   const cacheKey = `${origin.lat},${origin.lng}->${dest.lat},${dest.lng}`
-  if (_calcDirResultCache.has(cacheKey)) return Promise.resolve(_calcDirResultCache.get(cacheKey))
+  if (_calcDirResultCache.has(cacheKey)) { const v = _calcDirResultCache.get(cacheKey); return Promise.resolve(v === 'FAILED' ? null : v) }
   return new Promise(resolve => {
     let done = false
-    const finish = v => { if (!done) { done = true; resolve(v) } }
+    const finish = v => { if (!done) { done = true; _calcDirResultCache.set(cacheKey, v || 'FAILED'); resolve(v) } }
     setTimeout(() => finish(null), 6000)
     const svc = new google.maps.DirectionsService()
 
