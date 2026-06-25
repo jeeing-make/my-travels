@@ -2686,21 +2686,17 @@ function setupPlaceDrag(item, handle, placeId) {
     const ds = dragState
     dragState = null
 
-    // 드롭 위치 계산 — 교통편 제외 실제 장소만 대상
     const trip = DB.getTrip(state.tripId)
     const day = (trip?.days || []).find(d => d.id === state.dayId)
     if (!day) { cleanup(ds); return }
 
-    const draggingRect = ds.item.getBoundingClientRect()
-    const draggingMid = draggingRect.top + draggingRect.height / 2
-
-    // moveDrag와 동일한 insertBefore 로직
+    // transform 제거 전 다른 아이템 위치로 insertBefore 계산 (clientY 기준)
     let insertBefore = null
     ds.items.forEach(other => {
       if (other === ds.item) return
       const r = other.getBoundingClientRect()
       const mid = r.top + r.height / 2
-      if (draggingMid < mid && insertBefore === null) insertBefore = other
+      if (clientY < mid && insertBefore === null) insertBefore = other
     })
 
     cleanup(ds)
@@ -2712,14 +2708,13 @@ function setupPlaceDrag(item, handle, placeId) {
       const places = day.places
       let toIdx = places.findIndex(p => p.id === targetPlaceId)
       if (toIdx >= 0) {
-        if (dragIdx < toIdx) toIdx-- // 자기 자신 제거 후 인덱스 보정
+        if (dragIdx < toIdx) toIdx--
         DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, toIdx)
       }
     } else {
-      // 맨 아래로
       DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, day.places.length - 1)
     }
-    _calcDirResultCache.clear() // 순서 변경 시 경로 재계산
+    _calcDirResultCache.clear()
     renderPlaces()
   }
 
@@ -4474,23 +4469,25 @@ setInterval(() => { if (currentUser) updateSyncTime() }, 60000)
 async function initAuth() {
   if (!supa) return
 
-  // onAuthStateChange: 토큰 자동 갱신·로그인·로그아웃 이벤트 모두 처리
+  // onAuthStateChange: INITIAL_SESSION(새로고침), SIGNED_IN(로그인), TOKEN_REFRESHED, SIGNED_OUT
   supa.auth.onAuthStateChange(async (event, session) => {
-    if (state.isShareSession) return  // 공유 세션 중엔 무시
-    if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-      if (!session) return
+    if (state.isShareSession) return
+    if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+      if (!session) {
+        // INITIAL_SESSION인데 세션 없음 = 비로그인 상태 확정 → 즉시 렌더
+        if (event === 'INITIAL_SESSION') { updateAuthUI(); renderPage() }
+        return
+      }
       const wasLoggedIn = !!currentUser
       currentUser = session.user
       supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
         .then(({ error }) => { if (error) console.warn('allowed_users 등록 경고:', error.message) })
       if (!wasLoggedIn) {
-        // 처음 로그인(새로고침 포함) — 데이터 로드 후 렌더
         await loadFromSupabase()
         updateAuthUI()
         renderPage()
         startAutoSave()
       } else {
-        // 토큰 갱신만 — UI 재렌더 불필요
         updateAuthUI()
       }
     } else if (event === 'SIGNED_OUT') {
@@ -4499,18 +4496,6 @@ async function initAuth() {
       renderPage()
     }
   })
-
-  // 현재 세션 체크 (onAuthStateChange가 INITIAL_SESSION 이벤트를 늦게 줄 수 있어서 직접 확인)
-  const { data } = await supa.auth.getSession()
-  if (data.session && !currentUser) {
-    currentUser = data.session.user
-    supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
-      .then(({ error }) => { if (error) console.warn('allowed_users 등록 경고:', error.message) })
-    await loadFromSupabase()
-    updateAuthUI()
-    renderPage()
-    startAutoSave()
-  }
 }
 
 let collabChannel = null   // Realtime 채널 (collab 모드 전용)
