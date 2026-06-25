@@ -2597,7 +2597,7 @@ function setupPlaceDrag(item, handle, placeId) {
   const startDrag = (clientY) => {
     const listEl = document.getElementById('p3-places')
     if (!listEl) return
-    const items = Array.from(listEl.querySelectorAll('.pitem[data-place-id], .pitem[data-place_id]')).filter(el => el.dataset.placeId)
+    const items = Array.from(listEl.querySelectorAll('.pitem')).filter(el => el.dataset.placeId)
     dragState = {
       placeId,
       item,
@@ -2722,13 +2722,16 @@ function setupPlaceDrag(item, handle, placeId) {
   // ── 마우스 (PC) ──
   handle.addEventListener('mousedown', e => {
     e.preventDefault()
+    e.stopPropagation()
     startDrag(e.clientY)
-    const onMove = ev => moveDrag(ev.clientY)
+    const onMove = ev => { ev.preventDefault(); moveDrag(ev.clientY) }
     const onUp = ev => {
       endDrag(ev.clientY)
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
     }
+    document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   })
@@ -2772,9 +2775,9 @@ function renderPlaces() {
   if (window.__renderingPlaces) return
   window.__renderingPlaces = true
   const trip = DB.getTrip(state.tripId)
-  if (!trip) return
+  if (!trip) { window.__renderingPlaces = false; return }
   const day = (trip.days || []).find(d => d.id === state.dayId)
-  if (!day) return
+  if (!day) { window.__renderingPlaces = false; return }
 
   const list = document.getElementById('p3-places')
   list.innerHTML = ''
@@ -2819,7 +2822,11 @@ function renderPlaces() {
       const t = list2.find(x => x.id === trip.id)
       const h = t.hotels.find(x => x === hotelStart || (x.input === hotelStart.input))
       if (h) { h[sKey+'_m'] = dir.mode; h[sKey+'_d'] = dir.dur; h[sKey+'_x'] = dir.dist; DB.save(list2) }
-      renderPlaces()
+      // renderPlaces 재호출 안 함 — dirBar DOM 직접 업데이트
+      const modeIcon = dir.mode === 'transit' ? '🚇' : dir.mode === 'driving' ? '🚕' : '🚶'
+      const dist = dir.dist ? ` · ${dir.dist}` : ''
+      const dirtxt = bar.querySelector('.dirtxt')
+      if (dirtxt) dirtxt.textContent = `[ 🏨 ${hotelStart.name || '숙소'} → ${modeIcon} ${dir.dur}${dist} → 지도 열기 ]`
     }, `🏨 ${hotelStart.name || '숙소'} →`, day.countryCode)
     list.appendChild(bar)
   }
@@ -2831,7 +2838,17 @@ function renderPlaces() {
       if (prev.category !== 'transport' && place.category !== 'transport') {
         const bar = createDirBar(prev, place, place, dir => {
           DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
-          renderPlaces()
+          // renderPlaces 재호출 안 함 — dirBar DOM 직접 업데이트
+          const modeIcon = dir.mode === 'transit' ? '🚇' : dir.mode === 'driving' ? '🚕' : '🚶'
+          const dist = dir.dist ? ` · ${dir.dist}` : ''
+          const dirtxt = bar.querySelector('.dirtxt')
+          if (dirtxt) dirtxt.textContent = `[ ${modeIcon} ${dir.dur}${dist} → 지도 열기 ]`
+          const isKorea = day.countryCode === 'KR'
+          const mode = dir.mode || 'walking'
+          const url = isKorea
+            ? `https://map.kakao.com/?sX=${prev.lng}&sY=${prev.lat}&eX=${place.lng}&eY=${place.lat}`
+            : `https://www.google.com/maps/dir/?api=1&origin=${prev.lat},${prev.lng}&destination=${place.lat},${place.lng}&travelmode=${mode}`
+          bar.onclick = () => window.open(url, '_blank')
         }, null, day.countryCode)
         list.appendChild(bar)
       }
@@ -3011,7 +3028,11 @@ function renderPlaces() {
       const t = list2.find(x => x.id === trip.id)
       const h = t.hotels.find(x => x === hotelEnd || (x.input === hotelEnd.input))
       if (h) { h[eKey+'_m'] = dir.mode; h[eKey+'_d'] = dir.dur; h[eKey+'_x'] = dir.dist; DB.save(list2) }
-      renderPlaces()
+      // renderPlaces 재호출 안 함 — dirBar DOM 직접 업데이트
+      const modeIcon = dir.mode === 'transit' ? '🚇' : dir.mode === 'driving' ? '🚕' : '🚶'
+      const dist = dir.dist ? ` · ${dir.dist}` : ''
+      const dirtxt = bar.querySelector('.dirtxt')
+      if (dirtxt) dirtxt.textContent = `[ ${modeIcon} ${dir.dur}${dist} → 🏨 ${hotelEnd.name || '숙소'} → 지도 열기 ]`
     }, `→ 🏨 ${hotelEnd.name || '숙소'}`, day.countryCode)
     list.appendChild(bar)
   }
