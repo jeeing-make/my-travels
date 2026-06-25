@@ -2719,7 +2719,7 @@ function setupPlaceDrag(item, handle, placeId) {
       // 맨 아래로
       DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, day.places.length - 1)
     }
-    _calcDirCache.clear() // 순서 변경 시 경로 재계산
+    _calcDirResultCache.clear() // 순서 변경 시 경로 재계산
     renderPlaces()
   }
 
@@ -2786,6 +2786,10 @@ function renderPlaces() {
     window.__renderPlacesPending = setTimeout(renderPlaces, 600)
     return
   }
+  // 이미 렌더링 중이면 스킵 (경로 계산 콜백에서 재진입 방지)
+  if (window.__renderingPlaces) return
+  window.__renderingPlaces = true
+  setTimeout(() => { window.__renderingPlaces = false }, 0)
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
   const day = (trip.days || []).find(d => d.id === state.dayId)
@@ -2895,7 +2899,7 @@ function renderPlaces() {
           DB.save(list)
         }
         DB.deletePlace(state.tripId, state.dayId, place.id)
-        _calcDirCache.clear() // 장소 삭제 시 경로 재계산
+        _calcDirResultCache.clear() // 장소 삭제 시 경로 재계산
         renderPlaces()
       }
       list.appendChild(card)
@@ -3223,7 +3227,7 @@ async function savePlaceByCoords(coords) {
   } catch (e) {}
 
   DB.addPlace(state.tripId, state.dayId, place)
-  _calcDirCache.clear() // 장소 추가 시 경로 재계산
+  _calcDirResultCache.clear() // 장소 추가 시 경로 재계산
   renderPlaces()
   renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
 }
@@ -3268,7 +3272,7 @@ async function savePlace(nameOrId, coords) {
     console.warn('Directions 계산 실패:', e)
   }
   DB.addPlace(state.tripId, state.dayId, place)
-  _calcDirCache.clear()
+  _calcDirResultCache.clear()
   renderPlaces()
   renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
 }
@@ -3522,7 +3526,7 @@ function queryPlaces(input) {
 function queryPlacesNearby(name, coords) {
   return new Promise(resolve => {
     let done = false
-    const finish = v => { if (!done) { done = true; resolve(v) } }
+    const finish = v => { if (!done) { done = true; _calcDirResultCache.set(cacheKey, v); resolve(v) } }
     const timeout = setTimeout(() => finish(null), 5000)
 
     const svc = new google.maps.places.PlacesService(document.createElement('div'))
@@ -3583,10 +3587,11 @@ async function calcDirKorea(origin, dest) {
   return calcDir(origin, dest)
 }
 
+// 경로 결과 캐시 (키 → 결과값 저장)
+const _calcDirResultCache = new Map()
 function calcDir(origin, dest) {
   const cacheKey = `${origin.lat},${origin.lng}->${dest.lat},${dest.lng}`
-  if (_calcDirCache.has(cacheKey)) return Promise.resolve(null) // 세션 내 중복 호출 차단
-  _calcDirCache.add(cacheKey)
+  if (_calcDirResultCache.has(cacheKey)) return Promise.resolve(_calcDirResultCache.get(cacheKey))
   return new Promise(resolve => {
     let done = false
     const finish = v => { if (!done) { done = true; resolve(v) } }
