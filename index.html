@@ -112,6 +112,7 @@ button{cursor:pointer}
 .share-mode .pmorebtn,
 .share-mode .movebtn,
 .share-mode .delbtn,
+.share-mode .draghandle,
 .share-mode .pcost-add,
 .share-mode .pcost-disp,
 .share-mode .pmemo,
@@ -126,6 +127,7 @@ button{cursor:pointer}
 .share-mode .rmenu,
 .share-mode .pmorebtn,
 .share-mode .movebtn,
+.share-mode .draghandle,
 .share-mode #auth-btn,
 .share-mode #auth-status,
 .share-mode .transport-board-ctrl { display: none !important; }
@@ -195,7 +197,7 @@ button{cursor:pointer}
 .pvoucher-link:hover{opacity:.7}
 .delbtn{font-size:8px;letter-spacing:.06em;text-transform:uppercase;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888}
 .delbtn:hover{border-color:#000;color:#000}
-.movebtn{font-size:8px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:1px 6px;color:#888;line-height:1.4}
+.movebtn{font-size:10px;letter-spacing:.06em;border:.5px solid #ccc;background:#fff;padding:2px 7px;color:#888;line-height:1.4}
 .draghandle{font-size:14px;border:none;background:none;padding:1px 4px;color:#bbb;line-height:1;cursor:grab;touch-action:none;user-select:none}
 #city-tabs::-webkit-scrollbar{display:none}
 .city-tab{transition:color .2s,border-color .2s}
@@ -462,6 +464,40 @@ let currentUser = null
 let syncTimer = null
 
 /* =========================================================
+   외부 API 호출 가드 (세션 메모리) — 같은 요청을 반복하지 않음
+   ========================================================= */
+const dirCache = {}          // 'lat,lng>lat,lng' -> Promise<dir>   (Directions)
+const countryCache = {}      // 'lat,lng'(소수 2자리) -> Promise<code|null>  (Geocoding)
+const flagTried = {}         // dayId|sig -> true
+const placeIdTried = {}      // placeId -> true   (Places 백필)
+const flightFlagTried = {}   // flightId|dep/arr -> true
+const weatherTried = {}      // dayId|date -> true  (open-meteo)
+
+function geocodeCountry(lat, lng) {
+  const key = `${lat.toFixed(2)},${lng.toFixed(2)}`
+  if (countryCache[key]) return countryCache[key]
+  countryCache[key] = new Promise(resolve => {
+    try {
+      const geocoder = new google.maps.Geocoder()
+      geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+        if (status === 'OK' && results[0]) {
+          const c = results[0].address_components.find(c => c.types.includes('country'))
+          resolve(c ? c.short_name : null)
+        } else resolve(null)
+      })
+    } catch (e) { resolve(null) }
+  })
+  return countryCache[key]
+}
+
+// 키 순서와 무관한 비교용 문자열 (Supabase jsonb는 키 순서를 바꿈)
+function stableStr(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableStr).join(',') + ']'
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stableStr(v[k])).join(',') + '}'
+  return JSON.stringify(v)
+}
+
+/* =========================================================
    동기화 병합 엔진 — trip/day/place 단위 updatedAt 기반
    ========================================================= */
 function stampTimestamps(trips, prevTrips) {
@@ -545,6 +581,19 @@ function mergeById(arrA, arrB, mergeFn) {
     }
   })
   return order.map(id => map[id])
+}
+
+// 순서가 바뀐 장소 중 "바로 앞 장소"가 달라진 것만 이동정보 초기화
+// (전체 초기화하면 모든 구간 Directions를 다시 호출해서 버벅임)
+function clearStaleDirs(places, beforeIds) {
+  const prevOf = {}
+  beforeIds.forEach((id, i) => { prevOf[id] = i > 0 ? beforeIds[i - 1] : null })
+  places.forEach((p, i) => {
+    const newPrev = i > 0 ? places[i - 1].id : null
+    if (!(p.id in prevOf) || prevOf[p.id] !== newPrev) {
+      delete p.dirMode; delete p.dirDuration; delete p.dirDistance
+    }
+  })
 }
 
 const DB = {
@@ -716,6 +765,11 @@ const DB = {
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
     if (!day) return
+    // 삭제되는 장소 다음 장소의 이동정보만 초기화 (앞 장소가 바뀌므로)
+    const alive = day.places.filter(x => !x._deleted)
+    const idx = alive.findIndex(x => x.id === placeId)
+    const next = idx >= 0 ? alive[idx + 1] : null
+    if (next) { delete next.dirMode; delete next.dirDuration; delete next.dirDistance }
     const p = day.places.find(x => x.id === placeId)
     if (p) { p._deleted = Date.now(); p._updatedAt = Date.now() }
     this.save(list)
@@ -726,28 +780,33 @@ const DB = {
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
     if (!day) return
-    const i = day.places.findIndex(p => p.id === placeId)
+    // tombstone 제외한 실제 표시 순서 기준으로 이동
+    const alive = day.places.filter(p => !p._deleted)
+    const i = alive.findIndex(p => p.id === placeId)
     const j = i + dir
-    if (i < 0 || j < 0 || j >= day.places.length) return
-    const arr = day.places
-    ;[arr[i], arr[j]] = [arr[j], arr[i]]
-    arr.forEach(p => { delete p.dirMode; delete p.dirDuration; delete p.dirDistance })
+    if (i < 0 || j < 0 || j >= alive.length) return
+    const beforeIds = alive.map(p => p.id)
+    ;[alive[i], alive[j]] = [alive[j], alive[i]]
+    clearStaleDirs(alive, beforeIds)
+    day.places = [...alive, ...day.places.filter(p => p._deleted)]
     this.save(list)
   },
 
-  // 드래그앤드롭 — placeId를 toIndex 위치로 이동
+  // 드래그앤드롭 — placeId를 toIndex(표시 순서 기준) 위치로 이동
   reorderPlaces(tripId, dayId, placeId, toIndex) {
     const list = this.rawTrips
     const trip = list.find(t => t.id === tripId)
     if (!trip) return
     const day = trip.days.find(d => d.id === dayId)
     if (!day) return
-    const arr = day.places
-    const from = arr.findIndex(p => p.id === placeId)
-    if (from < 0 || toIndex < 0 || toIndex >= arr.length || from === toIndex) return
-    const [moved] = arr.splice(from, 1)
-    arr.splice(toIndex, 0, moved)
-    arr.forEach(p => { delete p.dirMode; delete p.dirDuration; delete p.dirDistance })
+    const alive = day.places.filter(p => !p._deleted)
+    const from = alive.findIndex(p => p.id === placeId)
+    if (from < 0 || toIndex < 0 || toIndex >= alive.length || from === toIndex) return
+    const beforeIds = alive.map(p => p.id)
+    const [moved] = alive.splice(from, 1)
+    alive.splice(toIndex, 0, moved)
+    clearStaleDirs(alive, beforeIds)
+    day.places = [...alive, ...day.places.filter(p => p._deleted)]
     this.save(list)
   }
 }
@@ -1023,43 +1082,29 @@ function countryCodeToFlag(code) {
   return String.fromCodePoint(...code.toUpperCase().split('').map(c => c.charCodeAt(0) + base))
 }
 
-// Day의 첫/끝 장소 좌표로 국가 조회 -> day.countryFlag 캐시
+// Day의 장소 좌표로 국가 조회 -> day.countryFlag 캐시
+// 장소 좌표 서명(flagSig)이 같으면 재조회 안 함 + 세션 중 같은 조합은 1회만 시도
 async function resolveDayCountryFlag(trip, day) {
   if (typeof google === 'undefined' || !google.maps) return
   const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
   if (!places.length) return
-  try {
-    const geocoder = new google.maps.Geocoder()
+  const sig = places.map(p => `${p.lat.toFixed(2)},${p.lng.toFixed(2)}`).join('|')
+  if (day.flagSig === sig) return
+  const tryKey = day.id + '|' + sig
+  if (flagTried[tryKey]) return
+  flagTried[tryKey] = true
 
-    // 모든 장소 좌표로 나라 조회 (중복 제거)
+  try {
     const codes = []
     for (const place of places) {
-      const result = await new Promise(resolve => {
-        geocoder.geocode({ location: { lat: place.lat, lng: place.lng } }, (results, status) => {
-          if (status === 'OK' && results[0]) resolve(results[0])
-          else resolve(null)
-        })
-      })
-      if (result) {
-        const c = result.address_components.find(c => c.types.includes('country'))
-        if (c && (!codes.length || codes[codes.length - 1] !== c.short_name)) {
-          codes.push(c.short_name)
-        }
-      }
-      await new Promise(r => setTimeout(r, 150)) // geocode rate limit 방지
+      const code = await geocodeCountry(place.lat, place.lng)   // 같은 좌표는 캐시에서
+      if (code && (!codes.length || codes[codes.length - 1] !== code)) codes.push(code)
     }
-
     if (!codes.length) return
-    // 국기 이모지 조합: 단일 나라면 🇨🇿, 여러 나라면 🇨🇿→🇩🇪
-    const flags = codes.map(countryCodeToFlag).filter(Boolean)
-    const flagStr = flags.join(' → ')
-    // 값이 같으면 저장/리렌더 안 함 (무한 리렌더 루프 방지)
-    if (day.countryFlag === flagStr && day.countryCode === codes[0]) return
-    // countryCode는 첫 번째 나라 기준 (화폐 등에 사용)
-    DB.updateDay(trip.id, day.id, {
-      countryFlag: flagStr,
-      countryCode: codes[0]
-    })
+
+    const flagStr = codes.map(countryCodeToFlag).filter(Boolean).join(' → ')
+    if (day.countryFlag === flagStr && day.countryCode === codes[0] && day.flagSig === sig) return
+    DB.updateDay(trip.id, day.id, { countryFlag: flagStr, countryCode: codes[0], flagSig: sig })
     if (state.page === 'p2') renderP2()
   } catch (e) { /* ignore */ }
 }
@@ -1083,22 +1128,23 @@ function defaultCurrencyForCountry(code) {
   return COUNTRY_CURRENCY[code] || 'USD'
 }
 
-// 환율 캐시 (세션 내) — { 'JPY': rate } rate = 1 JPY -> KRW
+// 환율 캐시 (세션 내) — { 'JPY': Promise<rate> } rate = 1 JPY -> KRW
 const fxCache = {}
-async function getFxRateToKRW(currency) {
-  if (currency === 'KRW') return 1
+function getFxRateToKRW(currency) {
+  if (currency === 'KRW') return Promise.resolve(1)
   if (fxCache[currency]) return fxCache[currency]
-
-  try {
-    const res = await fetch(`https://open.er-api.com/v6/latest/${currency}`)
-    if (res.ok) {
-      const data = await res.json()
-      const rate = data.rates && data.rates.KRW
-      if (rate) { fxCache[currency] = rate; return rate }
-    }
-  } catch (e) { console.warn(`환율 조회 실패 (er-api, ${currency}):`, e) }
-
-  return null
+  fxCache[currency] = (async () => {
+    try {
+      const res = await fetch(`https://open.er-api.com/v6/latest/${currency}`)
+      if (res.ok) {
+        const data = await res.json()
+        const rate = data.rates && data.rates.KRW
+        if (rate) return rate
+      }
+    } catch (e) { console.warn(`환율 조회 실패 (er-api, ${currency}):`, e) }
+    return null
+  })()
+  return fxCache[currency]
 }
 
 function renderP2() {
@@ -1110,10 +1156,6 @@ function renderP2() {
   renderP2Hotels(trip)
   renderP2Flights(trip)
   backfillFlightFlags(trip.id)
-
-  // 이동 요약 토글이 열려있으면 같이 갱신
-  const summaryBody = document.getElementById('transport-summary-body')
-  if (summaryBody && summaryBody.style.display !== 'none') renderTransportSummary()
 
   // Hotels/Flights 렌더 중 DB.save가 호출될 수 있으므로 최신 데이터 다시 읽기
   trip = DB.getTrip(state.tripId)
@@ -1138,20 +1180,21 @@ function renderP2() {
   const list = document.getElementById('p2-list')
   list.innerHTML = ''
 
+  // 교통편 place에 출발/도착 국기 매핑 (flights에서 참조)
+  const flightFlagMap = {}
+  ;(trip.flights || []).forEach(f => {
+    if (f.placeRef) {
+      flightFlagMap[f.placeRef.placeId] = {
+        dep: f._depFlag || '',
+        arr: f._arrFlag || '',
+        icon: TRANSPORT_ICON[f.mode || 'flight'] || '🚐'
+      }
+    }
+  })
+
   ;(trip.days || []).forEach((day, i) => {
     const row = document.createElement('div')
     row.className = 'rrow'
-    // 교통편 place에 출발/도착 국기 매핑 (flights에서 참조)
-    const flightFlagMap = {}
-    ;(trip.flights || []).forEach(f => {
-      if (f.placeRef) {
-        flightFlagMap[f.placeRef.placeId] = {
-          dep: f._depFlag || '',
-          arr: f._arrFlag || '',
-          icon: TRANSPORT_ICON[f.mode || 'flight'] || '🚐'
-        }
-      }
-    })
 
     const stopsHtml = (day.places || []).length
       ? (day.places || []).map(p => {
@@ -1169,7 +1212,6 @@ function renderP2() {
         }).join('').replace(/<span class="rarr">→<\/span>$/, '')
       : '<span style="font-size:9px;color:#ccc;letter-spacing:.08em;text-transform:uppercase">장소 없음</span>'
 
-    // 날짜별 국가 이모지 — 캐시된 값 사용, 없으면 비동기로 조회 후 갱신
     const dayFlag = day.countryFlag || trip.emoji || ''
     const dayMemo = day.memo ? `<span class="rday-memo">${day.memo}</span>` : ''
 
@@ -1208,7 +1250,7 @@ function renderP2() {
     })
     list.appendChild(row)
 
-    // 국가 이모지 비동기 조회 (캐시 없을 때만)
+    // 국가 이모지 비동기 조회 (캐시 없을 때만, 가드 내장)
     if (!day.countryFlag && day.places && day.places.length) {
       resolveDayCountryFlag(trip, day)
     }
@@ -1240,23 +1282,29 @@ function renderP2() {
 /* =========================================================
    PAGE 3
    ========================================================= */
+let lastMinimapDayId = null
+
 function renderP3() {
+  window.__editingMemo = false
   const trip = DB.getTrip(state.tripId)
   if (!trip) return
   const day = (trip.days || []).find(d => d.id === state.dayId)
   if (!day) return
 
-  // 날짜가 바뀌면 미니맵 닫고 초기화
-  const mapEl = document.getElementById('day-minimap')
-  const arrow = document.getElementById('minimap-arrow')
-  if (mapEl) mapEl.style.display = 'none'
-  if (arrow) arrow.textContent = '▾'
-  const track = document.getElementById('minimap-track')
-  if (track) { track.innerHTML = ''; track.style.transform = '' }
-  const tabs = document.getElementById('city-tabs')
-  if (tabs) tabs.innerHTML = ''
-  minimapCities = []
-  minimapCurrentCity = 0
+  // 날짜가 바뀐 경우에만 미니맵 닫고 초기화
+  if (lastMinimapDayId !== state.dayId) {
+    lastMinimapDayId = state.dayId
+    const mapEl = document.getElementById('day-minimap')
+    const arrow = document.getElementById('minimap-arrow')
+    if (mapEl) mapEl.style.display = 'none'
+    if (arrow) arrow.textContent = '▾'
+    const track = document.getElementById('minimap-track')
+    if (track) { track.innerHTML = ''; track.style.transform = '' }
+    const tabs = document.getElementById('city-tabs')
+    if (tabs) tabs.innerHTML = ''
+    minimapCities = []
+    minimapCurrentCity = 0
+  }
 
   const MON = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
   const dateObj = day.date ? new Date(day.date) : null
@@ -1269,18 +1317,22 @@ function renderP3() {
   oi.value = day.outfit || ''
   oi.onchange = () => DB.updateDay(state.tripId, state.dayId, { outfit: oi.value })
 
+  const wKey = day.id + '|' + day.date
   if (day.weather) {
     applyWeather(day.weather)
-  } else if (trip.lat && trip.lon && day.date) {
+  } else if (trip.lat && trip.lon && day.date && !weatherTried[wKey]) {
+    weatherTried[wKey] = true
+    document.getElementById('w-icon').textContent = '—'
     document.getElementById('w-cond').textContent = '날씨 불러오는 중…'
+    document.getElementById('w-desc').textContent = ''
     fetchWeather(trip.lat, trip.lon, day.date).then(w => {
-      if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); applyWeather(w) }
-      else { document.getElementById('w-icon').textContent = '—'; document.getElementById('w-cond').textContent = '날씨 없음' }
+      if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); if (state.dayId === day.id) applyWeather(w) }
+      else if (state.dayId === day.id) { document.getElementById('w-icon').textContent = '—'; document.getElementById('w-cond').textContent = '날씨 없음' }
     })
   } else {
     document.getElementById('w-icon').textContent = '—'
     document.getElementById('w-cond').textContent = '날씨 없음'
-    document.getElementById('w-desc').textContent = '장소 추가 시 해당 도시 날씨가 자동 표시됩니다'
+    document.getElementById('w-desc').textContent = (trip.lat && trip.lon) ? '예보 범위 밖이거나 조회에 실패했어요' : '장소 추가 시 해당 도시 날씨가 자동 표시됩니다'
   }
 
   renderPlaces()
@@ -1334,6 +1386,12 @@ function renderDayMinimap() {
   })
 }
 
+// 순서 변경 후 미니맵이 열려 있으면 다시 그림 (닫혀 있으면 다음에 열 때 새로 그림)
+function refreshMinimapIfOpen() {
+  const mapEl = document.getElementById('day-minimap')
+  if (mapEl && mapEl.style.display !== 'none') buildCityMaps()
+}
+
 // 장소를 좌표 거리 기반으로 그룹화 (연속된 장소가 30km 이상 떨어지면 새 그룹)
 function groupPlacesByCity(places) {
   const groups = []
@@ -1346,7 +1404,6 @@ function groupPlacesByCity(places) {
       groups.push(cur)
       return
     }
-    // 이전 장소와의 거리
     const last = cur.places[cur.places.length - 1]
     const dist = haversineKm(last.lat, last.lng, p.lat, p.lng)
     if (dist > THRESHOLD_KM) {
@@ -1357,7 +1414,6 @@ function groupPlacesByCity(places) {
     }
   })
 
-  // 각 그룹 이름 = 대표 장소 도시명 또는 "구간 N"
   groups.forEach((g, i) => {
     g.name = cityNameFromPlaces(g.places) || `구간 ${i + 1}`
   })
@@ -1396,11 +1452,6 @@ function cityNameFromPlaces(places) {
   return entries[0][0]
 }
 
-function extractCity(place) {
-  // 더 이상 사용 안 함 (거리 기반으로 대체)
-  return '루트'
-}
-
 function buildCityMaps() {
   const trip = DB.getTrip(state.tripId)
   const day = (trip?.days || []).find(d => d.id === state.dayId)
@@ -1416,34 +1467,27 @@ function buildCityMaps() {
   const dotsEl = document.getElementById('minimap-dots')
   if (!tabsEl || !trackEl || !dotsEl) return
 
-  // 도시 탭
   tabsEl.innerHTML = minimapCities.map((c, i) =>
     `<button class="city-tab" data-idx="${i}" style="flex-shrink:0;padding:11px 14px;font-size:10px;letter-spacing:.05em;font-weight:${i===0?'700':'400'};color:${i===0?'#000':'#aaa'};background:none;border:none;border-bottom:2px solid ${i===0?'#000':'transparent'};cursor:pointer;white-space:nowrap">${c.name} <span style="font-size:8px;color:#ccc">${c.places.length}</span></button>`
   ).join('')
 
-  // 슬라이드 (각 도시 지도)
   trackEl.innerHTML = minimapCities.map((c, i) =>
     `<div class="city-slide" data-idx="${i}" style="min-width:100%;box-sizing:border-box"><div class="city-map-inner" data-idx="${i}" style="width:100%;height:200px;background:#f2f2f2;position:relative"></div></div>`
   ).join('')
 
-  // 도트 (도시 1개면 숨김)
   dotsEl.style.display = minimapCities.length > 1 ? 'flex' : 'none'
   dotsEl.innerHTML = minimapCities.map((_, i) =>
     `<span class="city-dot" data-idx="${i}" style="width:6px;height:6px;border-radius:50%;background:${i===0?'#000':'#ddd'};cursor:pointer;transition:background .2s"></span>`
   ).join('')
 
-  // 탭/도트 클릭
   tabsEl.querySelectorAll('.city-tab').forEach(t =>
     t.addEventListener('click', () => goToCity(parseInt(t.dataset.idx, 10))))
   dotsEl.querySelectorAll('.city-dot').forEach(d =>
     d.addEventListener('click', () => goToCity(parseInt(d.dataset.idx, 10))))
 
-  // 스와이프 제스처
   setupMinimapSwipe()
 
-  // 각 도시 지도 이미지 로드
-  minimapCities.forEach((c, i) => loadCityMap(i))
-
+  // 현재 보이는 도시만 먼저 로드 (나머지는 탭/스와이프할 때 로드)
   goToCity(0)
 }
 
@@ -1459,18 +1503,14 @@ function loadCityMap(idx) {
   const h = 200
   const ps = city.places
 
-  // 마커 — size:mid여야 숫자 라벨이 보임 (small은 라벨 안 보임)
   const markers = ps.slice(0, 9).map((p, i) =>
     `markers=size:mid%7Ccolor:0x000000%7Clabel:${i+1}%7C${p.lat},${p.lng}`
   ).join('&')
 
-  // 얇은 반투명 경로
   const pathStr = ps.length > 1
     ? `&path=color:0x00000066%7Cweight:2%7C${ps.map(p=>`${p.lat},${p.lng}`).join('%7C')}`
     : ''
 
-  // 잘림 방지 — visible 파라미터로 모든 마커 + 여백 강제 표시
-  // 각 좌표 주변에 가상 여백 포인트 추가
   const lats = ps.map(p => p.lat), lngs = ps.map(p => p.lng)
   const latPad = Math.max((Math.max(...lats) - Math.min(...lats)) * 0.4, 0.003)
   const lngPad = Math.max((Math.max(...lngs) - Math.min(...lngs)) * 0.4, 0.003)
@@ -1539,7 +1579,7 @@ function setupMinimapSwipe() {
   }, { passive: true })
 }
 
-/* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만) ── */
+/* ── 기존 장소 placeId 백필 (좌표 있고 placeId 없는 장소만, 장소당 세션 1회) ── */
 async function backfillPlaceIds(tripId, dayId) {
   if (typeof google === 'undefined' || !google.maps || !google.maps.places) return
   const trip = DB.getTrip(tripId)
@@ -1548,23 +1588,21 @@ async function backfillPlaceIds(tripId, dayId) {
   if (!day) return
 
   const targets = (day.places || []).filter(p =>
-    p.category !== 'transport' && p.lat != null && !p.placeId
+    p.category !== 'transport' && p.lat != null && !p.placeId && !placeIdTried[p.id]
   )
   if (!targets.length) return
+  targets.forEach(p => { placeIdTried[p.id] = true })
 
   for (const place of targets) {
-    // 현재 tripId/dayId와 여전히 같은 페이지인지 확인 (페이지 이동 시 중단)
     if (state.tripId !== tripId || state.dayId !== dayId) return
     try {
       const detail = await queryPlacesNearby(place.name, { lat: place.lat, lng: place.lng })
       if (detail && detail.placeId) {
         DB.updatePlace(tripId, dayId, place.id, { placeId: detail.placeId })
-        // 지도 아이콘 링크 즉시 갱신
         const anchor = document.querySelector(`.pmap-link[data-pid="${place.id}"]`)
         if (anchor) anchor.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&query_place_id=${detail.placeId}`
       }
     } catch (e) { /* 개별 실패는 조용히 무시 */ }
-    // API 과호출 방지: 장소 간 300ms 간격
     await new Promise(r => setTimeout(r, 300))
   }
 }
@@ -1575,12 +1613,10 @@ function renderP2Hotels(trip) {
   wrap.innerHTML = ''
   const hotels = trip.hotels || []
 
-  // 기존 데이터에 id 없으면 부여
   let needSave = false
   hotels.forEach(h => { if (!h.id) { h.id = 'h' + Date.now() + Math.random().toString(36).slice(2,6); needSave = true } })
   if (needSave) DB.updateTrip(trip.id, { hotels })
 
-  // 표시용 도시/국가만 추출 (formatted_address에서 마지막 1~2개 구성요소)
   function shortAddress(addr) {
     if (!addr) return ''
     const parts = addr.split(',').map(s => s.trim())
@@ -1594,7 +1630,6 @@ function renderP2Hotels(trip) {
     const isResolved = !!(hotel.name && !hotel._editing)
 
     if (isResolved) {
-      // 접힌 상태 — 요약 카드
       row.innerHTML = `
         <div class="hotel-summary">
           <span class="hotel-summary-icon">🏨</span>
@@ -1640,7 +1675,6 @@ function renderP2Hotels(trip) {
         }
       }
     } else {
-      // 펼친 상태 — 입력 폼
       row.innerHTML = `
         <div class="hotel-row-top">
           <input type="text" class="h-name" placeholder="구글맵 링크 또는 호텔 이름" value="${hotel.input || ''}"/>
@@ -1707,7 +1741,6 @@ function renderP2Hotels(trip) {
       if (hotel.id) {
         t.hotels = t.hotels.filter(x => x.id !== hotel.id)
       } else {
-        // id가 없는 기존 데이터 — 동일 내용 첫 항목 제거
         const i = t.hotels.findIndex(x => !x.id && x.input === hotel.input && x.checkin === hotel.checkin && x.checkout === hotel.checkout)
         if (i >= 0) t.hotels.splice(i, 1)
       }
@@ -1722,47 +1755,37 @@ function renderP3IfActive() {
   if (state.page === 'p3') renderP3()
 }
 
-// 기존 교통편 국기 백필 — depLat/arrLat 있고 _depFlag/_arrFlag 없는 것만
+// 기존 교통편 국기 백필 — depLat/arrLat 있고 _depFlag/_arrFlag 없는 것만 (세션 1회)
 async function backfillFlightFlags(tripId) {
   if (typeof google === 'undefined' || !google.maps) return
+  const t0 = DB.getTrip(tripId)
+  if (!t0) return
+  const jobs = []
+  ;(t0.flights || []).forEach(f => {
+    if (!f._depFlag && f.depLat != null && !flightFlagTried[f.id + '|dep']) jobs.push({ id: f.id, which: 'dep', lat: f.depLat, lng: f.depLng })
+    if (!f._arrFlag && f.arrLat != null && !flightFlagTried[f.id + '|arr']) jobs.push({ id: f.id, which: 'arr', lat: f.arrLat, lng: f.arrLng })
+  })
+  if (!jobs.length) return
+  jobs.forEach(j => { flightFlagTried[j.id + '|' + j.which] = true })
+
+  const results = []
+  for (const j of jobs) {
+    const code = await geocodeCountry(j.lat, j.lng)
+    if (code) results.push({ ...j, flag: countryCodeToFlag(code) })
+  }
+  if (!results.length) return
+
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
   if (!t) return
-  const geocoder = new google.maps.Geocoder()
-  let changed = false
-
-  for (const f of (t.flights || [])) {
-    // dep 국기 없으면 채우기
-    if (!f._depFlag && f.depLat != null) {
-      try {
-        const result = await new Promise(resolve =>
-          geocoder.geocode({ location: { lat: f.depLat, lng: f.depLng } }, (results, status) =>
-            resolve(status === 'OK' && results[0] ? results[0] : null)))
-        if (result) {
-          const c = result.address_components.find(c => c.types.includes('country'))
-          if (c) { f._depFlag = countryCodeToFlag(c.short_name); changed = true }
-        }
-      } catch (e) {}
-      await new Promise(r => setTimeout(r, 150))
-    }
-    // arr 국기 없으면 채우기
-    if (!f._arrFlag && f.arrLat != null) {
-      try {
-        const result = await new Promise(resolve =>
-          geocoder.geocode({ location: { lat: f.arrLat, lng: f.arrLng } }, (results, status) =>
-            resolve(status === 'OK' && results[0] ? results[0] : null)))
-        if (result) {
-          const c = result.address_components.find(c => c.types.includes('country'))
-          if (c) { f._arrFlag = countryCodeToFlag(c.short_name); changed = true }
-        }
-      } catch (e) {}
-      await new Promise(r => setTimeout(r, 150))
-    }
-  }
-  if (changed) {
-    DB.save(list)
-    renderP2()
-  }
+  results.forEach(r => {
+    const f = (t.flights || []).find(x => x.id === r.id)
+    if (!f) return
+    if (r.which === 'dep') f._depFlag = r.flag
+    else f._arrFlag = r.flag
+  })
+  DB.save(list)
+  if (state.page === 'p2') renderP2()
 }
 
 /* ── 2페이지 항공편 관리 ── */
@@ -1773,105 +1796,103 @@ function renderP2Flights(trip) {
   const flights = trip.flights || []
 
   flights.forEach(flight => {
-    // resolved 상태는 서브토글에서 보여주니까 편집 중인 것만 렌더
     if (!flight._editing) return
 
     const row = document.createElement('div')
     row.className = 'hotel-row'
-      const mode = flight.mode || 'flight'
-      const fromLabel = mode === 'flight' ? '출발 공항' : '출발지'
-      const toLabel   = mode === 'flight' ? '도착 공항' : '도착지'
-      row.innerHTML = `
-        <div class="hotel-row-top">
-          <div class="transport-mode-pick" style="flex:1">
-            <button type="button" class="tmode-btn ${mode==='flight'?'active':''}" data-mode="flight">✈️</button>
-            <button type="button" class="tmode-btn ${mode==='train'?'active':''}" data-mode="train">🚄</button>
-            <button type="button" class="tmode-btn ${mode==='bus'?'active':''}" data-mode="bus">🚌</button>
-            <button type="button" class="tmode-btn ${mode==='car'?'active':''}" data-mode="car">🚗</button>
-          </div>
-          <button type="button" class="hotel-del">제거</button>
+    const mode = flight.mode || 'flight'
+    const fromLabel = mode === 'flight' ? '출발 공항' : '출발지'
+    const toLabel   = mode === 'flight' ? '도착 공항' : '도착지'
+    row.innerHTML = `
+      <div class="hotel-row-top">
+        <div class="transport-mode-pick" style="flex:1">
+          <button type="button" class="tmode-btn ${mode==='flight'?'active':''}" data-mode="flight">✈️</button>
+          <button type="button" class="tmode-btn ${mode==='train'?'active':''}" data-mode="train">🚄</button>
+          <button type="button" class="tmode-btn ${mode==='bus'?'active':''}" data-mode="bus">🚌</button>
+          <button type="button" class="tmode-btn ${mode==='car'?'active':''}" data-mode="car">🚗</button>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
-          <div style="display:flex;flex-direction:column;gap:4px">
-            <span style="font-size:9px;color:#888;letter-spacing:.08em">🛫 출발</span>
-            <input type="text" class="f-dep-name" placeholder="${fromLabel}" value="${flight.depInput || ''}"/>
-            <input type="text" class="f-dep-city" placeholder="도시명 (자동)" value="${flight.depCity || ''}"/>
-            <div style="display:flex;gap:4px">
-              <select class="f-dep-date" style="flex:1;font-size:10px;border:.5px solid #ddd;padding:5px 4px">${dateOptionsHtml(trip, flight.depDate)}</select>
-              <input type="time" class="f-dep-time" value="${flight.depTime || ''}" style="width:80px;font-size:10px;border:.5px solid #ddd;padding:5px 4px"/>
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px">
-            <span style="font-size:9px;color:#888;letter-spacing:.08em">🛬 도착</span>
-            <input type="text" class="f-arr-name" placeholder="${toLabel}" value="${flight.arrInput || ''}"/>
-            <input type="text" class="f-arr-city" placeholder="도시명 (자동)" value="${flight.arrCity || ''}"/>
-            <div style="display:flex;gap:4px">
-              <select class="f-arr-date" style="flex:1;font-size:10px;border:.5px solid #ddd;padding:5px 4px">${dateOptionsHtml(trip, flight.arrDate)}</select>
-              <input type="time" class="f-arr-time" value="${flight.arrTime || ''}" style="width:80px;font-size:10px;border:.5px solid #ddd;padding:5px 4px"/>
-            </div>
+        <button type="button" class="hotel-del">제거</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <span style="font-size:9px;color:#888;letter-spacing:.08em">🛫 출발</span>
+          <input type="text" class="f-dep-name" placeholder="${fromLabel}" value="${flight.depInput || ''}"/>
+          <input type="text" class="f-dep-city" placeholder="도시명 (자동)" value="${flight.depCity || ''}"/>
+          <div style="display:flex;gap:4px">
+            <select class="f-dep-date" style="flex:1;font-size:10px;border:.5px solid #ddd;padding:5px 4px">${dateOptionsHtml(trip, flight.depDate)}</select>
+            <input type="time" class="f-dep-time" value="${flight.depTime || ''}" style="width:80px;font-size:10px;border:.5px solid #ddd;padding:5px 4px"/>
           </div>
         </div>
-        ${flight.depName ? `<div class="hotel-resolved">✓ ${flight.depName} → ${flight.arrName || '?'}</div>` : ''}
-        <button type="button" class="hotel-done" style="margin-top:4px">완료</button>`
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <span style="font-size:9px;color:#888;letter-spacing:.08em">🛬 도착</span>
+          <input type="text" class="f-arr-name" placeholder="${toLabel}" value="${flight.arrInput || ''}"/>
+          <input type="text" class="f-arr-city" placeholder="도시명 (자동)" value="${flight.arrCity || ''}"/>
+          <div style="display:flex;gap:4px">
+            <select class="f-arr-date" style="flex:1;font-size:10px;border:.5px solid #ddd;padding:5px 4px">${dateOptionsHtml(trip, flight.arrDate)}</select>
+            <input type="time" class="f-arr-time" value="${flight.arrTime || ''}" style="width:80px;font-size:10px;border:.5px solid #ddd;padding:5px 4px"/>
+          </div>
+        </div>
+      </div>
+      ${flight.depName ? `<div class="hotel-resolved">✓ ${flight.depName} → ${flight.arrName || '?'}</div>` : ''}
+      <button type="button" class="hotel-done" style="margin-top:4px">완료</button>`
 
-      row.querySelectorAll('.tmode-btn').forEach(b => {
-        b.onclick = () => {
-          const list = DB.trips
-          const t = list.find(x => x.id === trip.id)
-          const f = t.flights.find(x => x.id === flight.id)
-          f.mode = b.dataset.mode
-          DB.save(list)
-          renderP2()
-        }
-      })
-
-      const save = (changes) => {
+    row.querySelectorAll('.tmode-btn').forEach(b => {
+      b.onclick = () => {
         const list = DB.trips
         const t = list.find(x => x.id === trip.id)
         const f = t.flights.find(x => x.id === flight.id)
-        Object.assign(f, changes)
+        f.mode = b.dataset.mode
         DB.save(list)
+        renderP2()
       }
+    })
 
-      row.querySelector('.f-dep-name').onchange = async e => {
-        const val = e.target.value.trim()
-        save({ depInput: val, depName: null, depLat: null, depLng: null, depCity: null })
-        await resolveFlightAirport(trip.id, flight.id, 'dep')
-        renderP2(); renderP3IfActive()
-      }
-      row.querySelector('.f-arr-name').onchange = async e => {
-        const val = e.target.value.trim()
-        save({ arrInput: val, arrName: null, arrLat: null, arrLng: null, arrCity: null })
-        await resolveFlightAirport(trip.id, flight.id, 'arr')
-        renderP2(); renderP3IfActive()
-      }
-      row.querySelector('.f-dep-city').onchange = e => { save({ depCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
-      row.querySelector('.f-arr-city').onchange = e => { save({ arrCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
-      row.querySelector('.f-dep-date').onchange = e => { save({ depDate: e.target.value }); syncFlightToPlaces(trip.id, flight.id); renderP2(); renderP3IfActive() }
-      row.querySelector('.f-dep-time').onchange = e => { save({ depTime: e.target.value }); syncFlightToPlaces(trip.id, flight.id); renderP2(); renderP3IfActive() }
-      row.querySelector('.f-arr-date').onchange = e => { save({ arrDate: e.target.value }); renderP2(); renderP3IfActive() }
-      row.querySelector('.f-arr-time').onchange = e => { save({ arrTime: e.target.value }); renderP2(); renderP3IfActive() }
+    const save = (changes) => {
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      const f = t.flights.find(x => x.id === flight.id)
+      Object.assign(f, changes)
+      DB.save(list)
+    }
 
-      row.querySelector('.hotel-done').onclick = async () => {
-        const list = DB.trips
-        const t = list.find(x => x.id === trip.id)
-        const f = t.flights.find(x => x.id === flight.id)
-        if (f.depInput && !f.depCity) await resolveFlightAirport(trip.id, flight.id, 'dep')
-        if (f.arrInput && !f.arrCity) await resolveFlightAirport(trip.id, flight.id, 'arr')
-        const list2 = DB.trips
-        const t2 = list2.find(x => x.id === trip.id)
-        const f2 = t2.flights.find(x => x.id === flight.id)
-        delete f2._editing
-        DB.save(list2)
-        syncFlightToPlaces(trip.id, flight.id)
-        renderP2(); renderP3IfActive()
-      }
+    row.querySelector('.f-dep-name').onchange = async e => {
+      const val = e.target.value.trim()
+      save({ depInput: val, depName: null, depLat: null, depLng: null, depCity: null })
+      await resolveFlightAirport(trip.id, flight.id, 'dep')
+      renderP2(); renderP3IfActive()
+    }
+    row.querySelector('.f-arr-name').onchange = async e => {
+      const val = e.target.value.trim()
+      save({ arrInput: val, arrName: null, arrLat: null, arrLng: null, arrCity: null })
+      await resolveFlightAirport(trip.id, flight.id, 'arr')
+      renderP2(); renderP3IfActive()
+    }
+    row.querySelector('.f-dep-city').onchange = e => { save({ depCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
+    row.querySelector('.f-arr-city').onchange = e => { save({ arrCity: e.target.value.trim() || null }); renderP2(); renderP3IfActive() }
+    row.querySelector('.f-dep-date').onchange = e => { save({ depDate: e.target.value }); syncFlightToPlaces(trip.id, flight.id); renderP2(); renderP3IfActive() }
+    row.querySelector('.f-dep-time').onchange = e => { save({ depTime: e.target.value }); syncFlightToPlaces(trip.id, flight.id); renderP2(); renderP3IfActive() }
+    row.querySelector('.f-arr-date').onchange = e => { save({ arrDate: e.target.value }); renderP2(); renderP3IfActive() }
+    row.querySelector('.f-arr-time').onchange = e => { save({ arrTime: e.target.value }); renderP2(); renderP3IfActive() }
+
+    row.querySelector('.hotel-done').onclick = async () => {
+      const list = DB.trips
+      const t = list.find(x => x.id === trip.id)
+      const f = t.flights.find(x => x.id === flight.id)
+      if (f.depInput && !f.depCity) await resolveFlightAirport(trip.id, flight.id, 'dep')
+      if (f.arrInput && !f.arrCity) await resolveFlightAirport(trip.id, flight.id, 'arr')
+      const list2 = DB.trips
+      const t2 = list2.find(x => x.id === trip.id)
+      const f2 = t2.flights.find(x => x.id === flight.id)
+      delete f2._editing
+      DB.save(list2)
+      syncFlightToPlaces(trip.id, flight.id)
+      renderP2(); renderP3IfActive()
+    }
 
     row.querySelector('.hotel-del').onclick = () => {
       const list = DB.trips
       const t = list.find(x => x.id === trip.id)
       const f = t.flights.find(x => x.id === flight.id)
-      // places에서도 제거
       if (f && f.placeRef) {
         const d = (t.days || []).find(x => x.id === f.placeRef.dayId)
         if (d) d.places = (d.places || []).filter(p => p.id !== f.placeRef.placeId)
@@ -1884,39 +1905,42 @@ function renderP2Flights(trip) {
   })
 }
 
-// 공항 이름/좌표 자동 검색
 // 교통편(flight) 정보를 출발일 Day의 places에 transport 항목으로 동기화
-// flight.placeRef = { dayId, placeId } 로 추적. 날짜가 바뀌면 기존 위치에서 제거하고 새 날짜 끝에 추가
+// 실제로 바뀐 게 있을 때만 저장 (렌더마다 불리므로 불필요한 저장/동기화 방지)
 function syncFlightToPlaces(tripId, flightId) {
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
-  const flight = t.flights.find(x => x.id === flightId)
+  if (!t) return
+  const flight = (t.flights || []).find(x => x.id === flightId)
   if (!flight) return
+  const before = JSON.stringify(t)
 
-  // 기존 위치에서 제거 (같은 날이면 인덱스 기억)
   let oldIndex = -1
+  let oldPlace = null
   if (flight.placeRef) {
     const oldDay = (t.days || []).find(d => d.id === flight.placeRef.dayId)
     if (oldDay) {
       const idx = (oldDay.places || []).findIndex(p => p.id === flight.placeRef.placeId)
       if (idx >= 0) {
+        oldPlace = oldDay.places[idx]
         if (oldDay.date === flight.depDate) oldIndex = idx
         oldDay.places.splice(idx, 1)
       }
     }
   }
 
-  // 표시 조건: 이름, 출발일, 그리고 양쪽 좌표(순서변경 가능한 위치 정보)가 있어야 함
+  const finish = () => { if (JSON.stringify(t) !== before) DB.save(list) }
+
   if (!flight.depName || !flight.arrName || !flight.depDate || flight.depLat == null || flight.arrLat == null) {
     flight.placeRef = null
-    DB.save(list)
+    finish()
     return
   }
 
   const targetDay = (t.days || []).find(d => d.date === flight.depDate)
   if (!targetDay) {
     flight.placeRef = null
-    DB.save(list)
+    finish()
     return
   }
 
@@ -1940,6 +1964,7 @@ function syncFlightToPlaces(tripId, flightId) {
     name: `${fromDisplay} → ${toDisplay}`,
     _flightId: flight.id
   }
+  if (oldPlace && oldPlace._updatedAt) place._updatedAt = oldPlace._updatedAt
   targetDay.places = targetDay.places || []
   if (oldIndex >= 0 && oldIndex <= targetDay.places.length) {
     targetDay.places.splice(oldIndex, 0, place)
@@ -1947,9 +1972,10 @@ function syncFlightToPlaces(tripId, flightId) {
     targetDay.places.push(place)
   }
   flight.placeRef = { dayId: targetDay.id, placeId }
-  DB.save(list)
+  finish()
 }
 
+// 공항 이름/좌표 자동 검색 (사용자가 입력했을 때만 호출됨)
 async function resolveFlightAirport(tripId, flightId, which) {
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
@@ -1963,7 +1989,6 @@ async function resolveFlightAirport(tripId, flightId, which) {
     if (detail) {
       let lat = detail.lat, lng = detail.lng
       let displayName = detail.name
-      // 영문 도시/국가명 추출 (REST Geocoding API, language=en 강제)
       if (lat != null) {
         try {
           const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&language=en&key=AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew`)
@@ -1974,7 +1999,6 @@ async function resolveFlightAirport(tripId, flightId, which) {
             const country = result.address_components.find(c => c.types.includes('country'))
             if (city && country) displayName = `${city.long_name}, ${country.long_name}`
             else if (country) displayName = country.long_name
-            // 국기 이모지 저장 (날짜 행 표시용)
             if (country) {
               const flag = countryCodeToFlag(country.short_name)
               if (which === 'dep') flight._depFlag = flag
@@ -2034,10 +2058,6 @@ document.getElementById('flight-section-toggle')?.addEventListener('click', () =
   toggle.textContent = open ? '[ 🚐 교통편 ▾ ]' : '[ 🚐 교통편 ▴ ]'
 })
 
-document.getElementById('transport-summary-toggle')?.addEventListener('click', () => {})
-
-function renderTransportSummary() {}  // 구버전 호환용 빈 함수
-
 function renderFlightModeGroups(trip) {
   const el = document.getElementById('flight-mode-groups')
   if (!el) return
@@ -2085,7 +2105,6 @@ function renderFlightModeGroups(trip) {
         const fl = t.flights.find(x => x.id === f.id)
         if (fl) fl._editing = true
         DB.save(list)
-        // 교통편 섹션 펼치기
         const body = document.getElementById('flight-section-body')
         if (body && body.style.display === 'none') {
           body.style.display = 'flex'
@@ -2133,7 +2152,7 @@ document.getElementById('p2-hotel-add')?.addEventListener('click', () => {
   renderP2()
 })
 
-// 숙소 입력값에서 이름/좌표 추출
+// 숙소 입력값에서 이름/좌표 추출 (사용자가 입력했을 때만 호출됨)
 async function resolveHotel(tripId, hotelId) {
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
@@ -2156,7 +2175,6 @@ async function resolveHotel(tripId, hotelId) {
       hotel.name = raw
     }
 
-    // 좌표를 못 얻었으면 이름으로 Places 검색해서 좌표 보강
     if (hotel.lat == null && typeof google !== 'undefined' && google.maps && google.maps.places) {
       const searchTerm = hotel.name && hotel.name !== '숙소' ? hotel.name : (raw.startsWith('http') ? null : raw)
       if (searchTerm) {
@@ -2179,7 +2197,6 @@ async function resolveHotel(tripId, hotelId) {
 function getHotelForDate(trip, date, position) {
   // position: 'start' = 그날 일정 맨 위에 표시 (전날 밤 묵었던 곳에서 출발) — 체크아웃 당일까지
   //           'end'   = 그날 일정 맨 아래에 표시 (그날 밤 묵을 곳) — 체크인 당일부터
-  // 체크인 당일: end만 / 체크아웃 당일: start만 / 그 사이: 둘 다
   if (!trip.hotels || !date) return null
   for (const hotel of trip.hotels) {
     if (!hotel.checkin || !hotel.checkout) continue
@@ -2192,17 +2209,8 @@ function getHotelForDate(trip, date, position) {
   return null
 }
 
-function renderHotelMarker(hotel, label) {
-  const div = document.createElement('div')
-  div.className = 'hotel-marker'
-  div.innerHTML = `<span class="hotel-marker-icon">🏨</span><span class="hotel-marker-text">${label} <span class="hotel-marker-name">${hotel.name || '숙소'}</span></span>`
-  return div
-}
-
-// 현재 Day의 장소별 비용을 KRW로 환산해 합산 표시
 // 장소 카드의 금액/화폐 영역 렌더 (클릭 → 인라인 편집)
 function renderPCost(el, place, day) {
-  // cur은 렌더 시점마다 최신 place.currency를 읽어야 함 (고정하면 변경 후에도 이전 값 사용)
   function getCur() {
     return place.currency || defaultCurrencyForCountry(day.countryCode)
   }
@@ -2236,18 +2244,26 @@ function renderPCost(el, place, day) {
       <button type="button" class="pcost-ok">완료</button>`
     const amtInp = el.querySelector('.pcost-amt')
     const curSel = el.querySelector('.pcost-cur')
+    let committed = false
     amtInp.focus()
     function commit() {
+      if (committed) return
+      committed = true
       window.__editingMemo = false
       const amt = parseFloat(amtInp.value) || null
       place.cost = amt
-      place.currency = curSel.value  // 최신 선택값 저장
+      place.currency = curSel.value
       DB.updatePlace(state.tripId, state.dayId, place.id, { cost: amt, currency: curSel.value })
       renderDisplay()
       updateDayTotal()
     }
     el.querySelector('.pcost-ok').onclick = commit
     amtInp.onkeydown = e => { if (e.key === 'Enter') commit() }
+    // 바깥을 누르면 자동 저장 (편집 상태로 멈춰서 화면 갱신이 막히는 것 방지)
+    el.addEventListener('focusout', e => {
+      if (e.relatedTarget && el.contains(e.relatedTarget)) return
+      setTimeout(() => { if (!el.contains(document.activeElement)) commit() }, 150)
+    })
   }
 
   renderDisplay()
@@ -2277,45 +2293,53 @@ async function updateDayTotal() {
 }
 
 // 두 좌표 지점간 이동 배지 생성 (장소-장소, 숙소-장소 공통)
-// dirInfo: {dirMode, dirDuration, dirDistance} 저장된 값 / onResolved(dir): 계산 완료 콜백
+// - 이동정보가 없을 때만 Directions 호출, 같은 구간은 세션 캐시 재사용
+// - 계산 완료 시 배지만 갱신(전체 리렌더 X) + onResolved로 저장만
 function createDirBar(from, to, dirInfo, onResolved, label, countryCode) {
   const bar = document.createElement('div')
   bar.className = 'dirbar'
   const isKorea = countryCode === 'KR'
-  const modeIcon = dirInfo.dirMode === 'transit' ? '🚇' : dirInfo.dirMode === 'driving' ? '🚕' : '🚶'
   const hasCoords = (from.lat != null && from.lng != null && to.lat != null && to.lng != null)
   const labelTxt = label ? `${label} ` : ''
 
-  const distVal = dirInfo.dirDistance ? parseFloat(dirInfo.dirDistance.replace(/[^0-9.]/g, '')) : null
-  const isLongWalk = dirInfo.dirMode === 'walking' && dirInfo.dirDistance && dirInfo.dirDistance.includes('km') && distVal > 2
-  const needsRecalc = !dirInfo.dirDuration || dirInfo.dirDuration === '정보 없음' || isLongWalk
-
-  if (needsRecalc && hasCoords && typeof google !== 'undefined' && google.maps) {
-    bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
-    const calc = isKorea ? calcDirKorea(from, to) : calcDir(from, to)
-    calc.then(dir => {
-      if (onResolved) onResolved(dir || { mode: 'walking', dur: '정보 없음', dist: '' })
-    })
-  } else {
-    const dur = dirInfo.dirDuration || '—'
-    const dist = dirInfo.dirDistance ? ` · ${dirInfo.dirDistance}` : ''
+  function paint(info) {
+    const modeIcon = info.dirMode === 'transit' ? '🚇' : info.dirMode === 'driving' ? '🚕' : '🚶'
+    const dur = info.dirDuration || '—'
+    const dist = info.dirDistance ? ` · ${info.dirDistance}` : ''
     bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}${modeIcon} ${dur}${dist} → 지도 열기 ]</div><div class="dirline"></div>`
     if (hasCoords) {
-      const mode = dirInfo.dirMode || 'walking'
+      const mode = info.dirMode || 'walking'
       const url = isKorea
         ? `https://map.kakao.com/?sX=${from.lng}&sY=${from.lat}&sName=${encodeURIComponent(shortPlaceName(from.name) || from.address || '출발')}&eX=${to.lng}&eY=${to.lat}&eName=${encodeURIComponent(shortPlaceName(to.name) || to.address || '도착')}`
         : `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=${mode}`
       bar.onclick = () => window.open(url, '_blank')
+      bar.style.opacity = ''
+      bar.style.cursor = ''
     } else {
+      bar.onclick = null
       bar.style.opacity = '.4'
       bar.style.cursor = 'default'
       bar.title = '좌표 정보가 없어 경로를 열 수 없어요'
     }
   }
+
+  if (!dirInfo.dirDuration && hasCoords && typeof google !== 'undefined' && google.maps) {
+    bar.innerHTML = `<div class="dirline"></div><div class="dirtxt">[ ${labelTxt}계산 중… ]</div><div class="dirline"></div>`
+    const key = `${from.lat},${from.lng}>${to.lat},${to.lng}`
+    if (!dirCache[key]) {
+      dirCache[key] = calcDir(from, to).then(d => d || { mode: 'walking', dur: '정보 없음', dist: '' })
+    }
+    dirCache[key].then(dir => {
+      paint({ dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
+      if (onResolved) onResolved(dir)
+    })
+  } else {
+    paint(dirInfo)
+  }
   return bar
 }
 
-// 공항명에서 도시/지역명만 추출 (예: "인천국제공항" -> "인천", "Narita International Airport" -> "Narita")
+// 공항명에서 도시/지역명만 추출
 function shortPlaceName(name) {
   if (!name) return ''
   return name
@@ -2328,14 +2352,12 @@ function shortPlaceName(name) {
 
 const WEEKDAY = ['SUN','MON','TUE','WED','THU','FRI','SAT']
 
-// 장소의 요일별 영업시간(hoursWeek, 구글 weekday_text: [0]=월요일~[6]=일요일)에서
-// 해당 날짜(dateStr)의 요일에 맞는 줄을 반환. 없으면 기존 hours(레거시) 또는 기본 메시지.
 function getHoursForDate(place, dateStr) {
   if (place.hoursWeek && Array.isArray(place.hoursWeek) && dateStr) {
     const d = new Date(dateStr)
     if (!isNaN(d)) {
-      const dow = d.getDay() // 0=일요일
-      const idx = dow === 0 ? 6 : dow - 1 // weekday_text: 0=월요일
+      const dow = d.getDay()
+      const idx = dow === 0 ? 6 : dow - 1
       if (place.hoursWeek[idx]) return place.hoursWeek[idx]
     }
   }
@@ -2351,7 +2373,6 @@ function getWeekday(dateStr) {
 
 const TRANSPORT_ICON = { flight: '✈️', train: '🚄', bus: '🚌', car: '🚗' }
 
-// trip.days의 날짜들로 <option> 목록 생성 (date select용)
 function dateOptionsHtml(trip, selected) {
   const opts = ['<option value="">선택 안함</option>']
   ;(trip.days || []).forEach(d => {
@@ -2362,54 +2383,24 @@ function dateOptionsHtml(trip, selected) {
   return opts.join('')
 }
 
-function renderFlightCard(flight) {
-  const depDisplay = flight.depCity ? flight.depCity.split(',')[0].trim() : shortPlaceName(flight.depName)
-  const arrDisplay = flight.arrCity ? flight.arrCity.split(',')[0].trim() : shortPlaceName(flight.arrName)
-  const card = document.createElement('div')
-  card.className = 'flight-card'
-  card.innerHTML = `
-    <div class="flight-side">
-      <div class="flight-city">${depDisplay}</div>
-      <div class="flight-label">FROM</div>
-      <div class="flight-time">${flight.depDate || ''}${flight.depTime ? ' · ' + flight.depTime : ''}</div>
-    </div>
-    <div class="flight-mid">
-      <span class="flight-dot"></span>
-      <span class="flight-line"></span>
-      <span class="flight-plane">${TRANSPORT_ICON[flight.mode] || '✈️'}</span>
-      <span class="flight-line"></span>
-      <span class="flight-dot filled"></span>
-    </div>
-    <div class="flight-side right">
-      <div class="flight-city">${arrDisplay}</div>
-      <div class="flight-label">TO</div>
-      <div class="flight-time">${flight.arrDate || ''}${flight.arrTime ? ' · ' + flight.arrTime : ''}</div>
-    </div>`
-  return card
+/* ── 장소 이동 공통 (↑↓ 버튼 / 드래그) ── */
+function afterPlaceMove() {
+  renderPlaces()
+  refreshMinimapIfOpen()
 }
 
 /* ── 장소 카드 드래그앤드롭 (PC 마우스 + 모바일 터치) ── */
 let dragState = null
 
 function setupPlaceDrag(item, handle, placeId) {
-  // 마우스/터치 공통 시작
   const startDrag = (clientY) => {
     const listEl = document.getElementById('p3-places')
     if (!listEl) return
     const items = Array.from(listEl.querySelectorAll('.pitem[data-place-id]'))
-    dragState = {
-      placeId,
-      item,
-      listEl,
-      items,
-      startY: clientY,
-      itemTop: item.getBoundingClientRect().top,
-      offset: clientY - item.getBoundingClientRect().top
-    }
+    dragState = { placeId, item, listEl, items, startY: clientY }
     item.classList.add('dragging')
     item.style.position = 'relative'
     item.style.zIndex = '50'
-    // userSelect는 드래그 중인 카드에만 (body 전체에 걸면 메모 입력 막힘)
     item.style.userSelect = 'none'
   }
 
@@ -2419,30 +2410,32 @@ function setupPlaceDrag(item, handle, placeId) {
     dragState.item.style.transform = `translateY(${dy}px)`
     dragState.item.style.opacity = '0.85'
     dragState.item.style.boxShadow = '0 6px 20px rgba(0,0,0,.18)'
-
-    // 현재 위치에서 가장 가까운 카드 찾기
     const draggingRect = dragState.item.getBoundingClientRect()
     const draggingMid = draggingRect.top + draggingRect.height / 2
-
     dragState.items.forEach(other => {
       if (other === dragState.item) return
-      other.style.transition = 'transform .15s'
       const r = other.getBoundingClientRect()
-      // 시각적 빈자리 힌트
-      if (draggingMid > r.top && draggingMid < r.bottom) {
-        other.style.background = '#f5f5f5'
-      } else {
-        other.style.background = ''
-      }
+      other.style.background = (draggingMid > r.top && draggingMid < r.bottom) ? '#f5f5f5' : ''
     })
   }
 
-  const endDrag = (clientY) => {
+  const cleanup = (ds) => {
+    ds.item.classList.remove('dragging')
+    ds.item.style.transform = ''
+    ds.item.style.opacity = ''
+    ds.item.style.boxShadow = ''
+    ds.item.style.position = ''
+    ds.item.style.zIndex = ''
+    ds.item.style.userSelect = ''
+    ds.items.forEach(el => { el.style.background = '' })
+    document.body.style.userSelect = ''
+  }
+
+  const endDrag = () => {
     if (!dragState) return
     const ds = dragState
     dragState = null
 
-    // 드롭 위치 계산 — 교통편 제외 실제 장소만 대상
     const trip = DB.getTrip(state.tripId)
     const day = (trip?.days || []).find(d => d.id === state.dayId)
     if (!day) { cleanup(ds); return }
@@ -2454,47 +2447,33 @@ function setupPlaceDrag(item, handle, placeId) {
     ds.items.forEach((other, idx) => {
       if (other === ds.item) return
       const r = other.getBoundingClientRect()
-      const mid = r.top + r.height / 2
-      if (draggingMid > mid) targetIndex = idx
+      if (draggingMid > r.top + r.height / 2) targetIndex = idx
     })
 
     cleanup(ds)
 
-    // DOM 인덱스 → 실제 places 인덱스 매핑
     const domOrder = ds.items.map(el => el.dataset.placeId)
-    if (targetIndex >= 0 && targetIndex < domOrder.length) {
-      const targetPlaceId = domOrder[targetIndex]
-      const places = day.places
-      const toIdx = places.findIndex(p => p.id === targetPlaceId)
-      if (toIdx >= 0) {
-        DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, toIdx)
-      }
-    } else if (targetIndex < 0) {
-      // 맨 위로
-      DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, 0)
+    const fromDom = domOrder.indexOf(ds.placeId)
+    let toIdx = -1
+    if (targetIndex >= 0) {
+      toIdx = day.places.findIndex(p => p.id === domOrder[targetIndex])
+    } else {
+      toIdx = day.places.findIndex(p => p.id === domOrder[0])
     }
-    renderPlaces()
+    // 제자리에 놓았으면 아무것도 안 함
+    if (toIdx < 0 || (targetIndex === fromDom) || (targetIndex < 0 && fromDom === 0) || (targetIndex === fromDom - 1)) {
+      return
+    }
+    DB.reorderPlaces(state.tripId, state.dayId, ds.placeId, toIdx)
+    afterPlaceMove()
   }
 
-  const cleanup = (ds) => {
-    ds.item.classList.remove('dragging')
-    ds.item.style.transform = ''
-    ds.item.style.opacity = ''
-    ds.item.style.boxShadow = ''
-    ds.item.style.position = ''
-    ds.item.style.zIndex = ''
-    ds.item.style.userSelect = ''
-    ds.items.forEach(el => { el.style.background = ''; el.style.transition = '' })
-    document.body.style.userSelect = ''  // 혹시 남아있으면 해제
-  }
-
-  // ── 마우스 (PC) ──
   handle.addEventListener('mousedown', e => {
     e.preventDefault()
     startDrag(e.clientY)
     const onMove = ev => moveDrag(ev.clientY)
-    const onUp = ev => {
-      endDrag(ev.clientY)
+    const onUp = () => {
+      endDrag()
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
@@ -2502,21 +2481,18 @@ function setupPlaceDrag(item, handle, placeId) {
     document.addEventListener('mouseup', onUp)
   })
 
-  // ── 터치 (모바일) — 꾹 누르면 시작 (long press 200ms) ──
   let touchTimer = null
   let touchStartY = 0
   handle.addEventListener('touchstart', e => {
     touchStartY = e.touches[0].clientY
     touchTimer = setTimeout(() => {
       startDrag(touchStartY)
-      // 햅틱 피드백
       if (navigator.vibrate) navigator.vibrate(30)
     }, 200)
   }, { passive: true })
 
   handle.addEventListener('touchmove', e => {
     if (!dragState) {
-      // 아직 드래그 시작 전 — 움직이면 취소 (스크롤로 간주)
       if (touchTimer) { clearTimeout(touchTimer); touchTimer = null }
       return
     }
@@ -2524,14 +2500,14 @@ function setupPlaceDrag(item, handle, placeId) {
     moveDrag(e.touches[0].clientY)
   }, { passive: false })
 
-  handle.addEventListener('touchend', e => {
+  handle.addEventListener('touchend', () => {
     if (touchTimer) { clearTimeout(touchTimer); touchTimer = null }
-    if (dragState) endDrag(e.changedTouches[0].clientY)
+    if (dragState) endDrag()
   })
 }
 
 function renderPlaces() {
-  // 메모/금액 입력 중이면 리렌더 연기 (커서/입력 보호) — 편집 끝나면 다시 그림
+  // 메모/금액 입력 중이면 리렌더 연기 (커서/입력 보호)
   if (window.__editingMemo) {
     clearTimeout(window.__renderPlacesPending)
     window.__renderPlacesPending = setTimeout(renderPlaces, 600)
@@ -2545,12 +2521,12 @@ function renderPlaces() {
   const list = document.getElementById('p3-places')
   list.innerHTML = ''
 
-  // 이 날짜에 출발하는 모든 교통편 강제 재동기화 (시간/모드 등 최신화)
+  // 이 날짜에 출발하는 교통편 재동기화 (바뀐 게 있을 때만 저장)
   ;(trip.flights || []).forEach(f => {
     if (f.depDate === day.date) syncFlightToPlaces(trip.id, f.id)
   })
 
-  // 전체 days를 스캔하여 좌표없음/연결끊김 교통편 정리 (placeRef 추적과 무관하게)
+  // 좌표없음/연결끊김 교통편 정리 (바뀐 게 있을 때만 저장)
   {
     const list2 = DB.trips
     const t2 = list2.find(x => x.id === trip.id)
@@ -2559,7 +2535,7 @@ function renderPlaces() {
       const before = (d.places || []).length
       d.places = (d.places || []).filter(p => {
         if (p.category !== 'transport') return true
-        if (!p._flightId) return false // 연결정보 없는 옛 데이터는 제거
+        if (!p._flightId) return false
         const f = (t2.flights || []).find(x => x.id === p._flightId)
         return !!(f && f.depLat != null && f.arrLat != null)
       })
@@ -2568,24 +2544,21 @@ function renderPlaces() {
     if (changed) DB.save(list2)
   }
 
-  // 최신 데이터 다시 로드
   const trip2 = DB.getTrip(state.tripId)
   const day2_ = (trip2.days || []).find(d => d.id === state.dayId)
-  let places = day2_.places || []
+  const places = day2_.places || []
 
   // 일정 시작 — 전날 묵었던 숙소 → 첫 장소
-  // 날짜+방향+연결장소ID 키로 저장 → 장소 순서 변경 시 자동 재계산
-  const hotelStart = getHotelForDate(trip, day.date, 'start')
-  if (hotelStart && hotelStart.lat != null && places[0] && places[0].lat != null) {
+  const hotelStart = getHotelForDate(trip2, day.date, 'start')
+  if (hotelStart && hotelStart.lat != null && places[0] && places[0].lat != null && places[0].category !== 'transport') {
     const first = places[0]
     const sKey = 'dirS_' + day.date + '_' + first.id
     const startDirInfo = { dirMode: hotelStart[sKey+'_m'], dirDuration: hotelStart[sKey+'_d'], dirDistance: hotelStart[sKey+'_x'] }
     const bar = createDirBar(hotelStart, first, startDirInfo, dir => {
       const list2 = DB.trips
       const t = list2.find(x => x.id === trip.id)
-      const h = t.hotels.find(x => x === hotelStart || (x.input === hotelStart.input))
-      if (h) { h[sKey+'_m'] = dir.mode; h[sKey+'_d'] = dir.dur; h[sKey+'_x'] = dir.dist; DB.save(list2) }
-      renderPlaces()
+      const h = t && t.hotels.find(x => x.id === hotelStart.id)
+      if (h && h[sKey+'_d'] !== dir.dur) { h[sKey+'_m'] = dir.mode; h[sKey+'_d'] = dir.dur; h[sKey+'_x'] = dir.dist; DB.save(list2) }
     }, `🏨 ${hotelStart.name || '숙소'} →`, day.countryCode)
     list.appendChild(bar)
   }
@@ -2593,11 +2566,14 @@ function renderPlaces() {
   places.forEach((place, i) => {
     if (i > 0) {
       const prev = places[i - 1]
-      // 교통편 항목 앞뒤로는 이동배지 표시 안함
       if (prev.category !== 'transport' && place.category !== 'transport') {
         const bar = createDirBar(prev, place, place, dir => {
-          DB.updatePlace(state.tripId, state.dayId, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
-          renderPlaces()
+          // 이미 같은 값이면 저장 안 함
+          const t = DB.getTrip(state.tripId)
+          const d = t && (t.days || []).find(x => x.id === day.id)
+          const cur = d && (d.places || []).find(x => x.id === place.id)
+          if (!cur || (cur.dirDuration === dir.dur && cur.dirMode === dir.mode)) return
+          DB.updatePlace(trip.id, day.id, place.id, { dirMode: dir.mode, dirDuration: dir.dur, dirDistance: dir.dist })
         }, null, day.countryCode)
         list.appendChild(bar)
       }
@@ -2632,9 +2608,8 @@ function renderPlaces() {
         </div>`
       card.querySelectorAll('.movebtn').forEach(btn => {
         btn.onclick = () => {
-          const dir = parseInt(btn.dataset.move, 10)
-          DB.movePlace(state.tripId, state.dayId, place.id, dir)
-          renderPlaces()
+          DB.movePlace(state.tripId, state.dayId, place.id, parseInt(btn.dataset.move, 10))
+          afterPlaceMove()
         }
       })
       card.querySelector('.delbtn').onclick = () => {
@@ -2646,16 +2621,17 @@ function renderPlaces() {
           DB.save(list)
         }
         DB.deletePlace(state.tripId, state.dayId, place.id)
-        renderPlaces()
+        afterPlaceMove()
       }
       list.appendChild(card)
       return
     }
 
     // 교통편 제외한 장소 번호 (미니맵 마커와 동일)
-    const placeNum = places.slice(0, i).filter(p => p.category !== 'transport').length + (place.category !== 'transport' ? 1 : 0)
+    const placeNum = places.slice(0, i).filter(p => p.category !== 'transport').length + 1
 
     const cat = CAT[place.category] || CAT.attraction
+    const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}${place.placeId ? '&query_place_id=' + place.placeId : ''}`
     const item = document.createElement('div')
     item.className = 'pitem'
     item.dataset.placeId = place.id
@@ -2665,16 +2641,13 @@ function renderPlaces() {
           <div class="pcat">[ ${cat.e} ${cat.l} ] <span style="display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:#000;color:#fff;font-size:8px;font-weight:700;vertical-align:middle;margin-left:1px">${placeNum}</span></div>
           <div style="display:flex;align-items:center;gap:6px">
             <div class="pname" data-pid="${place.id}" style="cursor:text">${place.name}</div>
-            ${place.lat != null ? (() => {
-              const mapUrl = place.lat != null
-                ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&query_place_id=${place.placeId || ''}`
-                : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`
-              return `<a class="pmap-link" data-pid="${place.id}" href="${mapUrl}" target="_blank" title="구글지도에서 보기">📍</a>`
-            })() : ''}
+            ${place.lat != null ? `<a class="pmap-link" data-pid="${place.id}" href="${mapUrl}" target="_blank" title="구글지도에서 보기">📍</a>` : ''}
           </div>
         </div>
         <div class="pright">
           ${place.isOpen === true ? '<span class="open-b">OPEN</span>' : place.isOpen === false ? '<span class="closed-b">CLOSED</span>' : ''}
+          <button class="movebtn" data-move="-1" ${i === 0 ? 'disabled' : ''} title="위로">↑</button>
+          <button class="movebtn" data-move="1" ${i === places.length - 1 ? 'disabled' : ''} title="아래로">↓</button>
           <button class="draghandle" data-pid="${place.id}" title="꾹 눌러서 순서 변경">⠿</button>
           <button class="pmorebtn" data-pid="${place.id}">+</button>
         </div>
@@ -2689,10 +2662,17 @@ function renderPlaces() {
         <textarea class="pmemo" rows="2" placeholder="메모 추가…" style="flex:1">${place.memo || ''}</textarea>
       </div>`
 
+    // ↑↓ 버튼
+    item.querySelectorAll('.movebtn').forEach(btn => {
+      btn.onclick = () => {
+        DB.movePlace(state.tripId, state.dayId, place.id, parseInt(btn.dataset.move, 10))
+        afterPlaceMove()
+      }
+    })
+
     item.querySelector('.pmorebtn').onclick = () => {
       openPlaceMoreModal(place, day)
     }
-    // 드래그 핸들 — 꾹 눌러서 순서 변경
     const handle = item.querySelector('.draghandle')
     if (handle) setupPlaceDrag(item, handle, place.id)
     const memoEl = item.querySelector('textarea')
@@ -2702,7 +2682,6 @@ function renderPlaces() {
       DB.updatePlace(state.tripId, state.dayId, place.id, { memo: memoEl.value })
     })
     memoEl.addEventListener('input', () => {
-      // 입력 즉시 로컬에만 저장 (리렌더 안 함 — 커서 유지)
       const list = DB.rawTrips
       const t = list.find(x => x.id === state.tripId)
       const d = t?.days.find(x => x.id === state.dayId)
@@ -2714,7 +2693,6 @@ function renderPlaces() {
       }
     })
 
-    // 바우처 링크 추가 버튼
     const voucherAddBtn = item.querySelector('.pvoucher-add')
     if (voucherAddBtn) {
       voucherAddBtn.onclick = () => {
@@ -2726,7 +2704,6 @@ function renderPlaces() {
       }
     }
 
-    // 바우처 링크 우클릭/롱프레스 → 삭제
     const voucherLink = item.querySelector('.pvoucher-link')
     if (voucherLink) {
       voucherLink.addEventListener('contextmenu', e => {
@@ -2738,10 +2715,8 @@ function renderPlaces() {
       })
     }
 
-    // 금액/화폐 — 클릭하면 인라인 편집
     renderPCost(item.querySelector('.pcost'), place, day)
 
-    // 이름 클릭 → 인라인 편집
     const nameEl = item.querySelector('.pname')
     nameEl.onclick = () => {
       const input = document.createElement('input')
@@ -2752,7 +2727,10 @@ function renderPlaces() {
       nameEl.replaceWith(input)
       input.focus()
       input.select()
+      let done = false
       const commit = () => {
+        if (done) return
+        done = true
         const v = input.value.trim()
         if (v && v !== place.name) {
           DB.updatePlace(state.tripId, state.dayId, place.id, { name: v })
@@ -2766,30 +2744,24 @@ function renderPlaces() {
   })
 
   // 일정 끝 — 마지막 장소 → 그날 밤 묵을 숙소
-  const hotelEnd = getHotelForDate(trip, day.date, 'end')
-  if (hotelEnd && hotelEnd.lat != null && places.length > 0 && places[places.length - 1].lat != null) {
-    const last = places[places.length - 1]
+  const hotelEnd = getHotelForDate(trip2, day.date, 'end')
+  const last = places[places.length - 1]
+  if (hotelEnd && hotelEnd.lat != null && last && last.lat != null && last.category !== 'transport') {
     const eKey = 'dirE_' + day.date + '_' + last.id
     const endDirInfo = { dirMode: hotelEnd[eKey+'_m'], dirDuration: hotelEnd[eKey+'_d'], dirDistance: hotelEnd[eKey+'_x'] }
     const bar = createDirBar(last, hotelEnd, endDirInfo, dir => {
       const list2 = DB.trips
       const t = list2.find(x => x.id === trip.id)
-      const h = t.hotels.find(x => x === hotelEnd || (x.input === hotelEnd.input))
-      if (h) { h[eKey+'_m'] = dir.mode; h[eKey+'_d'] = dir.dur; h[eKey+'_x'] = dir.dist; DB.save(list2) }
-      renderPlaces()
+      const h = t && t.hotels.find(x => x.id === hotelEnd.id)
+      if (h && h[eKey+'_d'] !== dir.dur) { h[eKey+'_m'] = dir.mode; h[eKey+'_d'] = dir.dur; h[eKey+'_x'] = dir.dist; DB.save(list2) }
     }, `→ 🏨 ${hotelEnd.name || '숙소'}`, day.countryCode)
     list.appendChild(bar)
   }
 
   updateDayTotal()
 
-  // 장소 변경 시 국기 재조회 (백그라운드, 값이 바뀐 경우에만 저장)
-  const trip3 = DB.getTrip(state.tripId)
-  const day3 = (trip3.days || []).find(d => d.id === state.dayId)
-  if (day3) {
-    const hasCoordPlaces = (day3.places || []).some(p => p.category !== 'transport' && p.lat != null)
-    if (hasCoordPlaces) resolveDayCountryFlag(trip3, day3)
-  }
+  // 국기 재조회 — 장소 좌표 조합이 바뀌었을 때만 (가드 내장)
+  if (places.some(p => p.category !== 'transport' && p.lat != null)) resolveDayCountryFlag(trip2, day2_)
 }
 
 /* =========================================================
@@ -2807,10 +2779,8 @@ async function expandShortUrl(url) {
       const timeout = setTimeout(() => controller.abort(), 5000)
       const res = await fetch(proxy + encodeURIComponent(url), { redirect: 'follow', signal: controller.signal })
       clearTimeout(timeout)
-      // redirect 후 최종 URL에 구글맵 URL이 담겨 있는 경우
       const finalUrl = res.url || ''
       if (finalUrl.includes('google.com/maps')) return finalUrl
-      // HTML 본문에서 구글맵 URL 추출
       const text = await res.text()
       const m = text.match(/https:\/\/www\.google\.com\/maps\/(?:place|search)[^"'\s\\]+/)
          || text.match(/https:\/\/maps\.google\.com[^"'\s\\]+/)
@@ -2832,7 +2802,7 @@ async function doAddPlace() {
   btn.disabled = true
 
   try {
-    // Plus Code 감지 (예: PPR2+MJ 세팡 말레이시아 세랑고르)
+    // Plus Code 감지
     const plusCodeMatch = raw.match(/^([23456789CFGHJMPQRVWX]{4,}\+[23456789CFGHJMPQRVWX]{2,3})(\s+.+)?$/i)
     if (plusCodeMatch && typeof google !== 'undefined' && google.maps) {
       const fullCode = plusCodeMatch[0]
@@ -2852,13 +2822,11 @@ async function doAddPlace() {
       }
     }
 
-    // 단축 URL이면 먼저 펼치기
     if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
       const expanded = await expandShortUrl(raw)
       if (expanded) {
         raw = expanded
       } else {
-        // 펼치기 실패 — 이름 입력 모달 (폰에서 단축 URL 붙여넣은 경우)
         btn.textContent = '추가 →'; btn.disabled = false
         inp.value = ''
         openNameModal('📍 장소 이름을 직접 입력해주세요\n(단축 URL은 폰에서 펼치기가 안 될 수 있어요)')
@@ -2866,26 +2834,15 @@ async function doAddPlace() {
       }
     }
 
-    // 좌표 추출 (날씨용 + 장소 lat/lng)
     let coords = null
     if (raw.startsWith('http')) {
       const coordMatch = raw.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/) || raw.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/)
       if (coordMatch) {
         coords = { lat: parseFloat(coordMatch[1]), lng: parseFloat(coordMatch[2]) }
-        const trip = DB.getTrip(state.tripId)
-        if (!trip.lat) {
-          DB.updateTrip(state.tripId, { lat: coords.lat, lon: coords.lng })
-          const day = DB.getTrip(state.tripId).days.find(d => d.id === state.dayId)
-          if (!day.weather && day.date) {
-            fetchWeather(coords.lat, coords.lng, day.date).then(w => {
-              if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); applyWeather(w) }
-            })
-          }
-        }
+        ensureTripLatLon(coords.lat, coords.lng)
       }
     }
 
-    // place_id 또는 이름 추출
     let target = raw
     if (raw.startsWith('http')) {
       const pidM = raw.match(/place_id[=:]([A-Za-z0-9_-]{15,})/)
@@ -2895,7 +2852,6 @@ async function doAddPlace() {
       else if (pidM) target = pidM[1]
       else if (pqM)  target = decodeURIComponent(pqM[1].replace(/\+/g, ' '))
       else if (coords) {
-        // 좌표는 있지만 이름을 못 찾으면 좌표 기반 역지오코딩 시도
         target = null
       } else {
         btn.textContent = '추가 →'; btn.disabled = false
@@ -2921,7 +2877,6 @@ async function doAddPlace() {
   }
 }
 
-// 좌표만 있을 때 — Geocoding API로 장소명 역추적
 // trip.lat/lon이 없으면 주어진 좌표로 채우고 날씨 갱신
 function ensureTripLatLon(lat, lng) {
   if (lat == null || lng == null) return
@@ -2929,9 +2884,11 @@ function ensureTripLatLon(lat, lng) {
   if (!trip || trip.lat != null) return
   DB.updateTrip(state.tripId, { lat, lon: lng })
   const day = DB.getTrip(state.tripId).days.find(d => d.id === state.dayId)
-  if (day && !day.weather && day.date) {
+  const wKey = day ? day.id + '|' + day.date : ''
+  if (day && !day.weather && day.date && !weatherTried[wKey]) {
+    weatherTried[wKey] = true
     fetchWeather(lat, lng, day.date).then(w => {
-      if (w) { DB.updateDay(state.tripId, state.dayId, { weather: w }); applyWeather(w) }
+      if (w) { DB.updateDay(state.tripId, day.id, { weather: w }); if (state.dayId === day.id) applyWeather(w) }
     })
   }
 }
@@ -2950,7 +2907,6 @@ async function savePlaceByCoords(coords) {
       if (result) {
         place.name = result.address_components?.[0]?.long_name || result.formatted_address || place.name
         place.address = result.formatted_address || ''
-        // place_id로 상세정보 추가 조회
         if (result.place_id) {
           const detail = await queryPlaces(result.place_id)
           if (detail) place = Object.assign(place, detail, { lat: coords.lat, lng: coords.lng })
@@ -2961,19 +2917,12 @@ async function savePlaceByCoords(coords) {
     console.warn('좌표 역지오코딩 실패:', e)
   }
 
-  try {
-    const trip = DB.getTrip(state.tripId)
-    const day = trip.days.find(d => d.id === state.dayId)
-    const prev = (day.places || []).slice(-1)[0]
-    if (prev && prev.lat && place.lat && typeof google !== 'undefined' && google.maps) {
-      const dir = await calcDir(prev, place)
-      if (dir) { place.dirMode = dir.mode; place.dirDuration = dir.dur; place.dirDistance = dir.dist }
-    }
-  } catch (e) {}
-
+  ensureTripLatLon(place.lat, place.lng)
+  // 이동정보는 화면 렌더 시 createDirBar가 1회 계산(캐시)하므로 여기서 따로 호출 안 함
   DB.addPlace(state.tripId, state.dayId, place)
   renderPlaces()
-  renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
+  renderDayMinimap()
+  refreshMinimapIfOpen()
 }
 
 async function savePlace(nameOrId, coords) {
@@ -2984,7 +2933,6 @@ async function savePlace(nameOrId, coords) {
     if (typeof google !== 'undefined' && google.maps && google.maps.places) {
       let detail = null
       if (coords) {
-        // 좌표가 있으면 좌표 주변에서 우선 검색 (동명의 다른 지점 매칭 방지)
         detail = await queryPlacesNearby(nameOrId, coords)
       }
       if (!detail) {
@@ -3002,26 +2950,13 @@ async function savePlace(nameOrId, coords) {
   }
 
   if (place.lat != null) ensureTripLatLon(place.lat, place.lng)
-
-  try {
-    const trip = DB.getTrip(state.tripId)
-    const day = trip.days.find(d => d.id === state.dayId)
-    const prev = (day.places || []).slice(-1)[0]
-    if (prev && prev.lat != null && place.lat != null && typeof google !== 'undefined' && google.maps) {
-      const dir = await calcDir(prev, place)
-      if (dir) { place.dirMode = dir.mode; place.dirDuration = dir.dur; place.dirDistance = dir.dist }
-      else { place.dirMode = 'walking'; place.dirDuration = '정보 없음'; place.dirDistance = '' }
-    }
-  } catch (e) {
-    console.warn('Directions 계산 실패:', e)
-  }
+  // 이동정보는 화면 렌더 시 createDirBar가 1회 계산(캐시)하므로 여기서 따로 호출 안 함
   DB.addPlace(state.tripId, state.dayId, place)
   renderPlaces()
-  renderDayMinimap()  // 토글 버튼 표시 여부 업데이트
+  renderDayMinimap()
+  refreshMinimapIfOpen()
 }
 
-
-// 장소 + 버튼 — 날짜 변경 / 삭제 모달
 // 여행 공유 링크 생성/표시
 async function openShareModal(trip) {
   if (!supa) { alert('공유 기능을 사용하려면 로그인이 필요해요.'); return }
@@ -3040,13 +2975,11 @@ async function openShareModal(trip) {
   modal.style.display = 'flex'
 
   try {
-    // 읽기전용 shareId
     let shareId = trip.shareId
     if (!shareId) {
       shareId = 's' + Date.now() + Math.random().toString(36).slice(2, 8)
       const list = DB.trips; const t = list.find(x => x.id === trip.id); t.shareId = shareId; DB.save(list)
     }
-    // 동시편집 collabId (별도 접두어 'c')
     let collabId = trip.collabId
     if (!collabId) {
       collabId = 'c' + Date.now() + Math.random().toString(36).slice(2, 8)
@@ -3055,14 +2988,11 @@ async function openShareModal(trip) {
 
     const tripLatest = DB.getTrip(trip.id)
 
-    // 읽기전용 업서트
     const r1 = await supa.from('shared_trips').upsert({ share_id: shareId, trip_data: tripLatest, mode: 'readonly' })
     if (r1.error) {
-      // mode 컬럼 없는 경우 폴백
       const r1b = await supa.from('shared_trips').upsert({ share_id: shareId, trip_data: tripLatest })
       if (r1b.error) throw r1b.error
     }
-    // 편집 업서트
     const r2 = await supa.from('shared_trips').upsert({ share_id: collabId, trip_data: tripLatest, mode: 'collab' })
     if (r2.error) {
       const r2b = await supa.from('shared_trips').upsert({ share_id: collabId, trip_data: tripLatest })
@@ -3124,6 +3054,7 @@ async function openShareModal(trip) {
   }
 }
 
+// 장소 + 버튼 — 날짜 변경 / 삭제 모달
 function openPlaceMoreModal(place, day) {
   const trip = DB.getTrip(state.tripId)
   const modal = document.getElementById('modal')
@@ -3154,34 +3085,29 @@ function openPlaceMoreModal(place, day) {
     const newDayId = document.getElementById('pm-day-select').value
     if (newDayId === day.id) { closeModal(); return }
 
-    // 좌표가 있고 hoursWeek가 없으면 영업시간 정보 보강
-    if (place.lat != null && place.lng != null && !place.hoursWeek && typeof google !== 'undefined' && google.maps) {
-      try {
-        const detail = await queryPlacesNearby(place.name, { lat: place.lat, lng: place.lng })
-        if (detail && detail.hoursWeek) place.hoursWeek = detail.hoursWeek
-      } catch (e) { /* ignore */ }
-    }
-
     const list = DB.trips
     const t = list.find(x => x.id === trip.id)
     const oldDay = (t.days || []).find(d => d.id === day.id)
     const newDay = (t.days || []).find(d => d.id === newDayId)
     if (!oldDay || !newDay) { closeModal(); return }
-    oldDay.places = (oldDay.places || []).filter(p => p.id !== place.id)
+    const moving = (oldDay.places || []).find(p => p.id === place.id)
+    if (!moving) { closeModal(); return }
+    const beforeIds = oldDay.places.map(p => p.id)
+    oldDay.places = oldDay.places.filter(p => p.id !== place.id)
+    clearStaleDirs(oldDay.places, beforeIds)   // 빠진 자리 다음 장소만 초기화
     newDay.places = newDay.places || []
-    // 이동 정보 초기화 (새 위치에서 재계산)
-    delete place.dirMode; delete place.dirDuration; delete place.dirDistance
-    newDay.places.push(place)
+    delete moving.dirMode; delete moving.dirDuration; delete moving.dirDistance
+    newDay.places.push(moving)
     DB.save(list)
     closeModal()
-    renderPlaces()
+    afterPlaceMove()
   }
 
   document.getElementById('pm-delete').onclick = () => {
     if (!confirm('이 장소를 삭제할까요?')) return
     DB.deletePlace(state.tripId, day.id, place.id)
     closeModal()
-    renderPlaces()
+    afterPlaceMove()
   }
 }
 
@@ -3224,7 +3150,7 @@ function openNameModal(hintMsg) {
 }
 
 /* =========================================================
-   Places API
+   Places API (사용자 입력 시에만 호출)
    ========================================================= */
 function queryPlaces(input) {
   return new Promise(resolve => {
@@ -3252,7 +3178,6 @@ function queryPlaces(input) {
         (res, s) => {
           if (s === 'OK' && res && res[0]) {
             let best = res[0]
-            // 입력어가 공항/터미널 등을 가리키면 types에 airport가 있는 결과 우선
             if (/공항|airport|terminal|터미널/i.test(input)) {
               const airportMatch = res.find(r => (r.types || []).includes('airport'))
               if (airportMatch) best = airportMatch
@@ -3297,7 +3222,7 @@ function queryPlacesNearby(name, coords) {
 
 function parsePlaceResult(r, placeId) {
   const oh = r.opening_hours
-  const result = {
+  return {
     name: r.name,
     category: guessCat(r.types || []),
     hoursWeek: oh && oh.weekday_text ? oh.weekday_text : null,
@@ -3309,27 +3234,9 @@ function parsePlaceResult(r, placeId) {
     placeId: placeId || null,
     memo: ''
   }
-  return result
 }
 
-const ODSAY_API_KEY = 'gEsk91pA/vakCe/c/8OTjg'
-
-// 두 좌표간 직선거리(m) — Haversine
-function haversineDist(lat1, lng1, lat2, lng2) {
-  const R = 6371000
-  const toRad = d => d * Math.PI / 180
-  const dLat = toRad(lat2 - lat1)
-  const dLng = toRad(lng2 - lng1)
-  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
-}
-
-// 한국: Google Directions API 사용 (ODsay는 브라우저 CORS 차단됨)
-// 2km 이하 도보, 초과 시 대중교통. 카카오맵 링크는 createDirBar에서 별도 처리.
-async function calcDirKorea(origin, dest) {
-  return calcDir(origin, dest)
-}
-
+// 2km 이하 도보, 초과 시 대중교통 (실패하면 도보 결과 사용)
 function calcDir(origin, dest) {
   return new Promise(resolve => {
     let done = false
@@ -3371,7 +3278,6 @@ function calcDir(origin, dest) {
    파일 읽기
    ========================================================= */
 function readFile(file) {
-  // 큰 이미지는 리사이즈해서 base64 용량을 줄임
   return new Promise((resolve, reject) => {
     const fr = new FileReader()
     fr.onload = e => {
@@ -3389,7 +3295,7 @@ function readFile(file) {
         ctx.drawImage(img, 0, 0, width, height)
         resolve(canvas.toDataURL('image/jpeg', 0.8))
       }
-      img.onerror = () => resolve(e.target.result) // 실패 시 원본
+      img.onerror = () => resolve(e.target.result)
       img.src = e.target.result
     }
     fr.onerror = e => reject(e)
@@ -3404,7 +3310,6 @@ function openTripModal(editId) {
   const trip = editId ? DB.getTrip(editId) : null
   const modal = document.getElementById('modal')
 
-  // 현재 사진 상태 (메모리에서 관리, 저장 시점에 trip에 적용)
   let photo1 = trip ? (trip.photo1 || null) : null
   let photo2 = trip ? (trip.photo2 || null) : null
 
@@ -3582,7 +3487,7 @@ function openDayModal(tripId, editDayId) {
 
   document.getElementById('btn-daysave').onclick = () => {
     const date = document.getElementById('f-date').value
-    const memo = document.getElementById('f-dmemo').value  // trim() 제거 — 빈 메모도 저장
+    const memo = document.getElementById('f-dmemo').value
     if (editDayId) {
       DB.updateDay(tripId, editDayId, { date, memo })
     } else {
@@ -3681,7 +3586,7 @@ const GUIDE_STEPS = [
   {
     tag: '[ STEP 5 / 7 ]',
     title: '장소 추가 &\n자동 경로 계산',
-    desc: '하단 입력창에 구글맵 링크(maps.app.goo.gl)나 장소 이름을 입력하면 자동으로 장소 정보가 채워져요. Plus Code도 지원해요.\n\n장소 이름 옆 📍를 누르면 구글지도로 바로 이동하고, 장소 사이의 이동 경로(도보/대중교통)가 자동 계산돼요. 국내는 카카오맵, 해외는 구글맵으로 열려요.',
+    desc: '하단 입력창에 구글맵 링크(maps.app.goo.gl)나 장소 이름을 입력하면 자동으로 장소 정보가 채워져요. Plus Code도 지원해요.\n\n장소 순서는 ↑↓ 버튼으로 바꿀 수 있고, 장소 사이의 이동 경로(도보/대중교통)가 자동 계산돼요. 국내는 카카오맵, 해외는 구글맵으로 열려요.',
     visual: () => `
       <div style="position:absolute;top:10px;left:14px;width:254px;display:flex;flex-direction:column">
         <div class="gv-card" style="position:relative;padding:8px 10px">
@@ -3689,6 +3594,8 @@ const GUIDE_STEPS = [
           <div style="display:flex;align-items:center;gap:5px">
             <div style="font-size:11px;font-weight:700">프라하 성</div>
             <span style="font-size:12px;opacity:.5">📍</span>
+            <span style="margin-left:auto;font-size:9px;border:.5px solid #ccc;padding:0 5px;color:#888">↑</span>
+            <span style="font-size:9px;border:.5px solid #ccc;padding:0 5px;color:#888">↓</span>
           </div>
           <div style="font-size:8px;color:#555;margin-top:2px">토요일: 09:00 ~ 17:00 · OPEN</div>
         </div>
@@ -3792,7 +3699,6 @@ document.getElementById('guide-overlay').addEventListener('click', e => {
    ========================================================= */
 // ── Supabase 동기화 ──
 async function loadFromSupabase() {
-  // 🔒 공유 세션에서는 본인 데이터 로드/덮어쓰기 차단
   if (state.isShareSession) return
   if (!supa || !currentUser) return
   try {
@@ -3817,9 +3723,8 @@ async function loadFromSupabase() {
       return
     }
 
-    // 양쪽 다 있음 → 병합 (trip/day/place 단위 최신 우선, 한쪽만 있는 건 보존)
     const merged = mergeTrips(localTrips, serverTrips)
-    localStorage.setItem('mt_trips_prev', JSON.stringify(localTrips))  // 안전 백업
+    localStorage.setItem('mt_trips_prev', JSON.stringify(localTrips))
     localStorage.setItem('mt_trips', JSON.stringify(merged))
     localStorage.setItem('mt_trips_saved_at', String(Date.now()))
     await syncToSupabase(merged)
@@ -3829,7 +3734,6 @@ async function loadFromSupabase() {
 }
 
 async function syncToSupabase(trips, opts) {
-  // 🔒 공유 세션에서는 본인 trips_data에 절대 쓰지 않음
   if (state.isShareSession) {
     console.warn('공유 세션 — 본인 데이터 동기화 차단됨')
     return false
@@ -3839,7 +3743,6 @@ async function syncToSupabase(trips, opts) {
     return false
   }
   try {
-    // 1단계: 서버 현재 데이터 먼저 읽기 (다른 기기가 그사이 저장했을 수 있음)
     const { data: serverRow } = await supa.from('trips_data')
       .select('data, updated_at')
       .eq('user_id', currentUser.id)
@@ -3848,15 +3751,12 @@ async function syncToSupabase(trips, opts) {
     let toSave = trips
     let changed = false
     if (serverRow && Array.isArray(serverRow.data) && serverRow.data.length) {
-      // 2단계: 내 데이터 + 서버 데이터 병합 (trip/day/place 단위 최신 우선)
       toSave = mergeTrips(trips, serverRow.data)
-      // 실제로 내용이 바뀐 경우에만 리렌더 (무한 리렌더 루프 방지)
-      changed = JSON.stringify(toSave) !== JSON.stringify(trips)
-      // 병합 결과를 로컬에도 반영
+      // 키 순서 무관 비교 — 실제로 내용이 바뀐 경우에만 리렌더
+      changed = stableStr(toSave) !== stableStr(trips)
       localStorage.setItem('mt_trips', JSON.stringify(toSave))
     }
 
-    // 3단계: 병합된 결과를 서버에 저장
     const now = new Date().toISOString()
     const { error } = await supa.from('trips_data').upsert({
       user_id: currentUser.id,
@@ -3866,7 +3766,6 @@ async function syncToSupabase(trips, opts) {
     if (!error) {
       localStorage.setItem('mt_trips_saved_at', String(new Date(now).getTime()))
       updateSyncTime()
-      // 병합으로 데이터가 바뀌었으면 화면 갱신
       if (changed && typeof renderPage === 'function') {
         try { renderPage() } catch {}
       }
@@ -3898,9 +3797,9 @@ let autoSaveTimer = null
 function startAutoSave() {
   if (autoSaveTimer) clearInterval(autoSaveTimer)
   autoSaveTimer = setInterval(async () => {
-    if (state.isShareSession) return  // 🔒 공유 세션 차단
+    if (state.isShareSession) return
     if (!currentUser || !supa) return
-    const ok = await syncToSupabase(DB.trips)
+    const ok = await syncToSupabase(DB.rawTrips)
     if (ok) {
       console.log('자동 저장 완료', new Date().toLocaleTimeString())
     } else {
@@ -3915,7 +3814,7 @@ function startAutoSave() {
 
 // 탭 복귀 시 서버 최신 데이터 조용히 확인
 document.addEventListener('visibilitychange', async () => {
-  if (state.isShareSession) return  // 🔒 공유 세션 차단
+  if (state.isShareSession) return
   if (document.visibilityState !== 'visible' || !currentUser || !supa) return
   try {
     const { data } = await supa.from('trips_data')
@@ -3974,10 +3873,8 @@ function updateAuthUI() {
   }
 }
 
-// 프로필 클릭 → 메뉴 토글
 document.getElementById('profile-btn')?.addEventListener('click', e => {
   e.stopPropagation()
-  // 어드민이면 기어 클릭 시 관리 패널
   if (e.target.id === 'admin-gear' && isAdmin()) { openAdminPanel(); return }
   const menu = document.getElementById('profile-menu')
   if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none'
@@ -3986,7 +3883,6 @@ document.addEventListener('click', () => {
   const menu = document.getElementById('profile-menu')
   if (menu) menu.style.display = 'none'
 })
-// 직전 데이터로 되돌리기 — 사고 복구용
 document.getElementById('restore-prev-btn')?.addEventListener('click', async () => {
   const prev = localStorage.getItem('mt_trips_prev')
   if (!prev || prev === '[]') {
@@ -4003,7 +3899,6 @@ document.getElementById('restore-prev-btn')?.addEventListener('click', async () 
       `[확인] 직전 데이터로 복구`
     )
     if (!ok) return
-    // 현재를 다시 백업으로 (되돌리기 취소 가능하게 swap)
     localStorage.setItem('mt_trips_prev', JSON.stringify(cur))
     localStorage.setItem('mt_trips', JSON.stringify(prevTrips))
     localStorage.setItem('mt_trips_saved_at', String(Date.now()))
@@ -4022,7 +3917,6 @@ document.getElementById('logout-btn')?.addEventListener('click', async () => {
   location.reload()
 })
 
-// 백업 — 현재 데이터를 JSON 파일로 내려받기
 document.getElementById('backup-btn')?.addEventListener('click', () => {
   const data = localStorage.getItem('mt_trips') || '[]'
   const blob = new Blob([data], { type: 'application/json' })
@@ -4033,7 +3927,6 @@ document.getElementById('backup-btn')?.addEventListener('click', () => {
   a.click()
 })
 
-// 복원 — JSON 파일을 읽어서 데이터 교체
 document.getElementById('restore-btn')?.addEventListener('click', () => {
   document.getElementById('restore-file')?.click()
 })
@@ -4044,7 +3937,6 @@ document.getElementById('restore-file')?.addEventListener('change', e => {
   reader.onload = async () => {
     try {
       const text = String(reader.result).trim()
-      // 앞뒤 따옴표 제거 (콘솔에서 복사한 경우 대비)
       const cleaned = text.startsWith("'") && text.endsWith("'") ? text.slice(1, -1)
                     : text.startsWith('"') && text.endsWith('"') ? JSON.parse(text)
                     : text
@@ -4062,7 +3954,6 @@ document.getElementById('restore-file')?.addEventListener('change', e => {
 
       localStorage.setItem('mt_trips', JSON.stringify(parsed))
       localStorage.setItem('mt_trips_saved_at', String(Date.now()))
-      // 서버에도 즉시 업로드
       if (currentUser && supa) await syncToSupabase(parsed)
       alert('복원 완료! 데이터를 다시 불러올게요.')
       location.reload()
@@ -4107,7 +3998,6 @@ function openAuthModal() {
     const { data, error } = await supa.auth.signInWithPassword({ email, password })
     if (error) { msg.textContent = error.message; return }
     currentUser = data.user
-    // 저장 권한 등록 (조용히)
     supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
       .then(({ error }) => { if (error) console.warn('allowed_users 경고:', error.message) })
     await loadFromSupabase()
@@ -4127,7 +4017,6 @@ function openAuthModal() {
       msg.textContent = '인증 이메일을 보냈어요. 메일함을 확인해주세요!'
     } else {
       currentUser = data.user
-      // 신규 가입자 allowed_users 자동 등록
       const { error: suErr } = await supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
       if (suErr) alert('⚠️ 계정 권한 등록 실패 — 서버 저장이 안 될 수 있어요.\n' + (suErr.message||''))
       await loadFromSupabase()
@@ -4208,7 +4097,6 @@ document.getElementById('auth-btn')?.addEventListener('click', () => {
   openAuthModal()
 })
 
-// 동기화 시간 주기적 갱신 (1분마다)
 setInterval(() => { if (currentUser) updateSyncTime() }, 60000)
 
 async function initAuth() {
@@ -4216,7 +4104,6 @@ async function initAuth() {
   const { data } = await supa.auth.getSession()
   if (data.session) {
     currentUser = data.session.user
-    // 저장 권한 등록 (실패해도 조용히 — 실제 저장 실패 시에만 경고)
     supa.from('allowed_users').upsert({ user_id: currentUser.id, email: currentUser.email })
       .then(({ error }) => { if (error) console.warn('allowed_users 등록 경고:', error.message) })
     await loadFromSupabase()
@@ -4226,10 +4113,9 @@ async function initAuth() {
   }
 }
 
-let collabChannel = null   // Realtime 채널 (collab 모드 전용)
-let collabShareId = null   // 현재 collab share_id
+let collabChannel = null
+let collabShareId = null
 
-// collab 모드에서 로컬 저장할 때마다 Supabase shared_trips도 업데이트
 async function pushCollabData() {
   if (!collabShareId || !supa) return
   const trip = DB.getTrip(state.tripId)
@@ -4254,19 +4140,16 @@ async function initShareView() {
       isCollab = data.mode === 'collab' || shareId.startsWith('c')
     }
 
-    // ⚠️ 공유 모드는 localStorage(mt_trips)를 절대 건드리지 않음 — 본인 데이터 보호
-    // 별도 격리 저장소(shareTrips)에만 보관
     window.__shareTrips = [tripData]
     state.shareMode = !isCollab
     state.shareData = tripData
     state.tripId = tripData.id
     state.page = 'p2'
-    state.isShareSession = true  // 공유 세션 플래그
+    state.isShareSession = true
 
     if (isCollab) {
       collabShareId = shareId
 
-      // Realtime 구독 — DB.save/trips가 isShareSession 플래그로 격리 처리됨
       collabChannel = supa.channel('collab:' + shareId)
         .on('postgres_changes', {
           event: 'UPDATE', schema: 'public', table: 'shared_trips',
@@ -4274,6 +4157,9 @@ async function initShareView() {
         }, payload => {
           if (!payload.new || !payload.new.trip_data) return
           const updated = payload.new.trip_data
+          // 내가 방금 보낸 내용과 같으면 다시 그리지 않음 (에코 루프 방지)
+          const cur = (window.__shareTrips || [])[0]
+          if (cur && stableStr(cur) === stableStr(updated)) return
           window.__shareTrips = [updated]
           state.shareData = updated
           renderPage()
@@ -4296,7 +4182,6 @@ async function initShareView() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   const isShare = await initShareView()
-  // 초기 히스토리 베이스 심기 — 뒤로가기가 앱 밖으로 나가지 않도록
   if (!isShare) {
     history.replaceState({ page: 'p1', tripId: null, dayId: null }, '', location.pathname)
   }
@@ -4312,6 +4197,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('guide-fab').classList.add('show')
     }
   }
+})
+
+// 구글 지도 스크립트 로드 완료 후 현재 화면 1회 갱신 (async 로드라 첫 렌더 땐 google이 없음)
+window.addEventListener('load', () => {
+  if (typeof google !== 'undefined' && google.maps && state.page !== 'p1') renderPage()
 })
 </script>
 
