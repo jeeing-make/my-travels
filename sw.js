@@ -1,4 +1,4 @@
-const CACHE_NAME = 'my-travels-v1'
+const CACHE_NAME = 'my-travels-v2'
 const STATIC = [
   '/my-travels/',
   '/my-travels/index.html',
@@ -21,19 +21,26 @@ self.addEventListener('activate', e => {
   self.clients.claim()
 })
 
+// 네트워크 우선: 항상 최신 파일을 받고, 오프라인일 때만 캐시 사용
 self.addEventListener('fetch', e => {
-  // Google Maps, Supabase 등 외부 API는 캐시 안 함
+  if (e.request.method !== 'GET') return
+  // Google Maps, Supabase 등 외부 API는 건드리지 않음
   if (!e.request.url.startsWith(self.location.origin)) return
 
+  const isPage = e.request.mode === 'navigate'
+  const req = isPage ? fetch(e.request.url, { cache: 'no-cache' }) : fetch(e.request)
+
   e.respondWith(
-    caches.match(e.request).then(cached => {
-      return cached || fetch(e.request).then(res => {
-        if (res.ok) {
-          const clone = res.clone()
-          caches.open(CACHE_NAME).then(c => c.put(e.request, clone))
-        }
-        return res
-      }).catch(() => cached)
-    })
+    req.then(res => {
+      if (res.ok) {
+        const clone = res.clone()
+        caches.open(CACHE_NAME).then(c => c.put(e.request, clone))
+      }
+      return res
+    }).catch(() =>
+      caches.match(e.request).then(cached =>
+        cached || (isPage ? caches.match('/my-travels/index.html') : undefined)
+      )
+    )
   )
 })
