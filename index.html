@@ -596,6 +596,35 @@ function clearStaleDirs(places, beforeIds) {
   })
 }
 
+// 저장할 때 "배열에서 빠진 항목"을 삭제표시(tombstone)로 남김
+// → 서버 병합 시 예전 위치의 항목이 되살아나는 문제 방지
+function keepMissing(obj, key, prevArr, now) {
+  if (!prevArr || !prevArr.length) return
+  obj[key] = obj[key] || []
+  const ids = new Set(obj[key].map(x => x && x.id))
+  prevArr.forEach(x => {
+    if (x && x.id && !ids.has(x.id)) obj[key].push(x._deleted ? x : { ...x, _deleted: now, _updatedAt: now })
+  })
+}
+function preserveDeletions(next, prev) {
+  if (!Array.isArray(prev) || !prev.length) return
+  const now = Date.now()
+  const nextMap = new Map(next.map(t => [t.id, t]))
+  prev.forEach(pt => {
+    const nt = nextMap.get(pt.id)
+    if (!nt) { next.push(pt._deleted ? pt : { ...pt, _deleted: now, _updatedAt: now }); return }
+    keepMissing(nt, 'hotels', pt.hotels, now)
+    keepMissing(nt, 'flights', pt.flights, now)
+    nt.days = nt.days || []
+    const ndMap = new Map(nt.days.map(d => [d.id, d]))
+    ;(pt.days || []).forEach(pd => {
+      const nd = ndMap.get(pd.id)
+      if (!nd) { nt.days.push(pd._deleted ? pd : { ...pd, _deleted: now, _updatedAt: now }); return }
+      keepMissing(nd, 'places', pd.places, now)
+    })
+  })
+}
+
 const DB = {
   // 화면 표시용 — tombstone(_deleted) 제거
   get trips() {
@@ -633,6 +662,7 @@ const DB = {
         localStorage.setItem('mt_trips_prev', prev)
         localStorage.setItem('mt_trips_prev_at', localStorage.getItem('mt_trips_saved_at') || '')
       }
+      preserveDeletions(t, prevTrips) // 빠진 항목은 삭제표시로 남김 (서버에서 되살아나지 않게)
       stampTimestamps(t, prevTrips)  // 변경된 trip/day/place에 _updatedAt 부여
       localStorage.setItem('mt_trips', JSON.stringify(t))
       localStorage.setItem('mt_trips_saved_at', String(Date.now()))
@@ -3096,8 +3126,10 @@ function openPlaceMoreModal(place, day) {
     oldDay.places = oldDay.places.filter(p => p.id !== place.id)
     clearStaleDirs(oldDay.places, beforeIds)   // 빠진 자리 다음 장소만 초기화
     newDay.places = newDay.places || []
-    delete moving.dirMode; delete moving.dirDuration; delete moving.dirDistance
-    newDay.places.push(moving)
+    // 새 날짜에는 새 id로 추가 (예전 날짜엔 삭제표시가 남아 서버에서 되살아나지 않음)
+    const moved = { ...moving, id: 'p' + Date.now() }
+    delete moved.dirMode; delete moved.dirDuration; delete moved.dirDistance; delete moved._updatedAt
+    newDay.places.push(moved)
     DB.save(list)
     closeModal()
     afterPlaceMove()
