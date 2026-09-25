@@ -467,27 +467,29 @@ let syncTimer = null
    외부 API 호출 가드 (세션 메모리) — 같은 요청을 반복하지 않음
    ========================================================= */
 const dirCache = {}          // 'lat,lng>lat,lng' -> Promise<dir>   (Directions)
-const countryCache = {}      // 'lat,lng'(소수 2자리) -> Promise<code|null>  (Geocoding)
-const flagTried = {}         // dayId|sig -> true
 const placeIdTried = {}      // placeId -> true   (Places 백필)
-const flightFlagTried = {}   // flightId|dep/arr -> true
 const weatherTried = {}      // dayId|date -> true  (open-meteo)
-
-function geocodeCountry(lat, lng) {
-  const key = `${lat.toFixed(2)},${lng.toFixed(2)}`
-  if (countryCache[key]) return countryCache[key]
-  countryCache[key] = new Promise(resolve => {
-    try {
-      const geocoder = new google.maps.Geocoder()
-      geocoder.geocode({ location: { lat, lng } }, (results, status) => {
-        if (status === 'OK' && results[0]) {
-          const c = results[0].address_components.find(c => c.types.includes('country'))
-          resolve(c ? c.short_name : null)
-        } else resolve(null)
-      })
-    } catch (e) { resolve(null) }
-  })
-  return countryCache[key]
+// 주소 문자열에서 나라 찾기 — 구글 API 호출 없음 (Places가 준 address 사용)
+const COUNTRY_NAMES = {
+  KR:['대한민국','South Korea','Korea'], JP:['일본','Japan'], CN:['중국','China'], TW:['대만','Taiwan'],
+  HK:['홍콩','Hong Kong'], TH:['태국','Thailand'], VN:['베트남','Vietnam','Việt Nam'], MY:['말레이시아','Malaysia'],
+  SG:['싱가포르','Singapore'], PH:['필리핀','Philippines'], ID:['인도네시아','Indonesia'], IN:['인도','India'],
+  GB:['영국','United Kingdom'], FR:['프랑스','France'], DE:['독일','Germany','Deutschland'], IT:['이탈리아','Italy','Italia'],
+  ES:['스페인','Spain','España'], PT:['포르투갈','Portugal'], AT:['오스트리아','Austria','Österreich'], NL:['네덜란드','Netherlands','Nederland'],
+  BE:['벨기에','Belgium'], CH:['스위스','Switzerland','Schweiz'], CZ:['체코','Czechia','Czech Republic','Česko'], SK:['슬로바키아','Slovakia'],
+  HU:['헝가리','Hungary','Magyarország'], PL:['폴란드','Poland','Polska'], HR:['크로아티아','Croatia'], SI:['슬로베니아','Slovenia'],
+  GR:['그리스','Greece'], DK:['덴마크','Denmark'], SE:['스웨덴','Sweden'], NO:['노르웨이','Norway'], FI:['핀란드','Finland'],
+  TR:['튀르키예','터키','Türkiye','Turkey'], AU:['오스트레일리아','호주','Australia'], NZ:['뉴질랜드','New Zealand'],
+  CA:['캐나다','Canada'], MX:['멕시코','Mexico','México'], US:['미국','United States','USA'], AE:['아랍에미리트','United Arab Emirates'], QA:['카타르','Qatar']
+}
+const COUNTRY_LOOKUP = Object.entries(COUNTRY_NAMES)
+  .flatMap(([code, names]) => names.map(n => [n.toLowerCase(), code]))
+  .sort((a, b) => b[0].length - a[0].length)   // 긴 이름 먼저 (인도네시아 > 인도)
+function countryFromAddress(addr) {
+  if (!addr) return null
+  const s = addr.toLowerCase()
+  for (const [name, code] of COUNTRY_LOOKUP) if (s.includes(name)) return code
+  return null
 }
 
 // 키 순서와 무관한 비교용 문자열 (Supabase jsonb는 키 순서를 바꿈)
@@ -1112,31 +1114,19 @@ function countryCodeToFlag(code) {
   return String.fromCodePoint(...code.toUpperCase().split('').map(c => c.charCodeAt(0) + base))
 }
 
-// Day의 장소 좌표로 국가 조회 -> day.countryFlag 캐시
-// 장소 좌표 서명(flagSig)이 같으면 재조회 안 함 + 세션 중 같은 조합은 1회만 시도
-async function resolveDayCountryFlag(trip, day) {
-  if (typeof google === 'undefined' || !google.maps) return
-  const places = (day.places || []).filter(p => p.category !== 'transport' && p.lat != null)
-  if (!places.length) return
-  const sig = places.map(p => `${p.lat.toFixed(2)},${p.lng.toFixed(2)}`).join('|')
-  if (day.flagSig === sig) return
-  const tryKey = day.id + '|' + sig
-  if (flagTried[tryKey]) return
-  flagTried[tryKey] = true
-
-  try {
-    const codes = []
-    for (const place of places) {
-      const code = await geocodeCountry(place.lat, place.lng)   // 같은 좌표는 캐시에서
-      if (code && (!codes.length || codes[codes.length - 1] !== code)) codes.push(code)
-    }
-    if (!codes.length) return
-
-    const flagStr = codes.map(countryCodeToFlag).filter(Boolean).join(' → ')
-    if (day.countryFlag === flagStr && day.countryCode === codes[0] && day.flagSig === sig) return
-    DB.updateDay(trip.id, day.id, { countryFlag: flagStr, countryCode: codes[0], flagSig: sig })
-    if (state.page === 'p2') renderP2()
-  } catch (e) { /* ignore */ }
+// Day의 장소 주소로 국기 표시 — 구글 API 호출 없음, 바뀌었을 때만 저장
+function resolveDayCountryFlag(trip, day) {
+  const codes = []
+  ;(day.places || []).forEach(p => {
+    if (p.category === 'transport') return
+    const code = countryFromAddress(p.address)
+    if (code && codes[codes.length - 1] !== code) codes.push(code)
+  })
+  if (!codes.length) return
+  const flagStr = codes.map(countryCodeToFlag).filter(Boolean).join(' → ')
+  if (day.countryFlag === flagStr && day.countryCode === codes[0]) return
+  DB.updateDay(trip.id, day.id, { countryFlag: flagStr, countryCode: codes[0] })
+  if (state.page === 'p2') renderP2()
 }
 
 // 국가코드(ISO 2자) -> 기본 화폐코드
@@ -1185,7 +1175,6 @@ function renderP2() {
 
   renderP2Hotels(trip)
   renderP2Flights(trip)
-  backfillFlightFlags(trip.id)
 
   // Hotels/Flights 렌더 중 DB.save가 호출될 수 있으므로 최신 데이터 다시 읽기
   trip = DB.getTrip(state.tripId)
@@ -1618,7 +1607,7 @@ async function backfillPlaceIds(tripId, dayId) {
   if (!day) return
 
   const targets = (day.places || []).filter(p =>
-    p.category !== 'transport' && p.lat != null && !p.placeId && !placeIdTried[p.id]
+    p.category !== 'transport' && p.lat != null && !p.placeId && !p.placeIdChecked && !placeIdTried[p.id]
   )
   if (!targets.length) return
   targets.forEach(p => { placeIdTried[p.id] = true })
@@ -1627,8 +1616,8 @@ async function backfillPlaceIds(tripId, dayId) {
     if (state.tripId !== tripId || state.dayId !== dayId) return
     try {
       const detail = await queryPlacesNearby(place.name, { lat: place.lat, lng: place.lng })
+      DB.updatePlace(tripId, dayId, place.id, { placeIdChecked: true, ...(detail && detail.placeId ? { placeId: detail.placeId } : {}) })
       if (detail && detail.placeId) {
-        DB.updatePlace(tripId, dayId, place.id, { placeId: detail.placeId })
         const anchor = document.querySelector(`.pmap-link[data-pid="${place.id}"]`)
         if (anchor) anchor.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&query_place_id=${detail.placeId}`
       }
@@ -1783,39 +1772,6 @@ function renderP2Hotels(trip) {
 
 function renderP3IfActive() {
   if (state.page === 'p3') renderP3()
-}
-
-// 기존 교통편 국기 백필 — depLat/arrLat 있고 _depFlag/_arrFlag 없는 것만 (세션 1회)
-async function backfillFlightFlags(tripId) {
-  if (typeof google === 'undefined' || !google.maps) return
-  const t0 = DB.getTrip(tripId)
-  if (!t0) return
-  const jobs = []
-  ;(t0.flights || []).forEach(f => {
-    if (!f._depFlag && f.depLat != null && !flightFlagTried[f.id + '|dep']) jobs.push({ id: f.id, which: 'dep', lat: f.depLat, lng: f.depLng })
-    if (!f._arrFlag && f.arrLat != null && !flightFlagTried[f.id + '|arr']) jobs.push({ id: f.id, which: 'arr', lat: f.arrLat, lng: f.arrLng })
-  })
-  if (!jobs.length) return
-  jobs.forEach(j => { flightFlagTried[j.id + '|' + j.which] = true })
-
-  const results = []
-  for (const j of jobs) {
-    const code = await geocodeCountry(j.lat, j.lng)
-    if (code) results.push({ ...j, flag: countryCodeToFlag(code) })
-  }
-  if (!results.length) return
-
-  const list = DB.trips
-  const t = list.find(x => x.id === tripId)
-  if (!t) return
-  results.forEach(r => {
-    const f = (t.flights || []).find(x => x.id === r.id)
-    if (!f) return
-    if (r.which === 'dep') f._depFlag = r.flag
-    else f._arrFlag = r.flag
-  })
-  DB.save(list)
-  if (state.page === 'p2') renderP2()
 }
 
 /* ── 2페이지 항공편 관리 ── */
