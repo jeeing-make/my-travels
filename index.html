@@ -1053,12 +1053,14 @@ async function resolveDayCountryFlag(trip, day) {
     // 국기 이모지 조합: 단일 나라면 🇨🇿, 여러 나라면 🇨🇿→🇩🇪
     const flags = codes.map(countryCodeToFlag).filter(Boolean)
     const flagStr = flags.join(' → ')
+    // 값이 같으면 저장/리렌더 안 함 (무한 리렌더 루프 방지)
+    if (day.countryFlag === flagStr && day.countryCode === codes[0]) return
     // countryCode는 첫 번째 나라 기준 (화폐 등에 사용)
     DB.updateDay(trip.id, day.id, {
       countryFlag: flagStr,
       countryCode: codes[0]
     })
-    renderP2()
+    if (state.page === 'p2') renderP2()
   } catch (e) { /* ignore */ }
 }
 
@@ -1143,7 +1145,6 @@ function renderP2() {
     const flightFlagMap = {}
     ;(trip.flights || []).forEach(f => {
       if (f.placeRef) {
-        const depFlag = f.depLat != null ? '' : ''  // 좌표로 나라 캐시 없으면 빈값
         flightFlagMap[f.placeRef.placeId] = {
           dep: f._depFlag || '',
           arr: f._arrFlag || '',
@@ -2227,6 +2228,7 @@ function renderPCost(el, place, day) {
   }
 
   function renderEdit() {
+    window.__editingMemo = true   // 금액 입력 중 리렌더 방지
     const cur = getCur()
     el.innerHTML = `
       <select class="pcost-cur">${CURRENCY_LIST.map(c => `<option value="${c}" ${(cur === c) ? 'selected' : ''}>${c}</option>`).join('')}</select>
@@ -2236,6 +2238,7 @@ function renderPCost(el, place, day) {
     const curSel = el.querySelector('.pcost-cur')
     amtInp.focus()
     function commit() {
+      window.__editingMemo = false
       const amt = parseFloat(amtInp.value) || null
       place.cost = amt
       place.currency = curSel.value  // 최신 선택값 저장
@@ -2425,7 +2428,6 @@ function setupPlaceDrag(item, handle, placeId) {
       if (other === dragState.item) return
       other.style.transition = 'transform .15s'
       const r = other.getBoundingClientRect()
-      const mid = r.top + r.height / 2
       // 시각적 빈자리 힌트
       if (draggingMid > r.top && draggingMid < r.bottom) {
         other.style.background = '#f5f5f5'
@@ -2500,7 +2502,7 @@ function setupPlaceDrag(item, handle, placeId) {
     document.addEventListener('mouseup', onUp)
   })
 
-  // ── 터치 (모바일) — 꾹 누르면 시작 (long press 250ms) ──
+  // ── 터치 (모바일) — 꾹 누르면 시작 (long press 200ms) ──
   let touchTimer = null
   let touchStartY = 0
   handle.addEventListener('touchstart', e => {
@@ -2529,7 +2531,7 @@ function setupPlaceDrag(item, handle, placeId) {
 }
 
 function renderPlaces() {
-  // 메모 입력 중이면 리렌더 연기 (커서/입력 보호) — 편집 끝나면 다시 그림
+  // 메모/금액 입력 중이면 리렌더 연기 (커서/입력 보호) — 편집 끝나면 다시 그림
   if (window.__editingMemo) {
     clearTimeout(window.__renderPlacesPending)
     window.__renderPlacesPending = setTimeout(renderPlaces, 600)
@@ -2781,7 +2783,7 @@ function renderPlaces() {
 
   updateDayTotal()
 
-  // 장소 변경 시 국기 재조회 (백그라운드, countryFlag 초기화 후 재계산)
+  // 장소 변경 시 국기 재조회 (백그라운드, 값이 바뀐 경우에만 저장)
   const trip3 = DB.getTrip(state.tripId)
   const day3 = (trip3.days || []).find(d => d.id === state.dayId)
   if (day3) {
@@ -2852,7 +2854,6 @@ async function doAddPlace() {
 
     // 단축 URL이면 먼저 펼치기
     if (/^https?:\/\/maps\.app\.goo\.gl/.test(raw) || /^https?:\/\/goo\.gl/.test(raw)) {
-      const shortUrlOriginal = raw
       const expanded = await expandShortUrl(raw)
       if (expanded) {
         raw = expanded
@@ -3469,7 +3470,6 @@ function openTripModal(editId) {
   const fi2 = document.getElementById('fi2')
 
   fi1.addEventListener('change', () => {
-    console.log('fi1 change', fi1.files)
     const f = fi1.files[0]; if (!f) return
     readFile(f).then(src => {
       photo1 = src
@@ -3481,7 +3481,6 @@ function openTripModal(editId) {
   })
 
   fi2.addEventListener('change', () => {
-    console.log('fi2 change', fi2.files)
     const f = fi2.files[0]; if (!f) return
     readFile(f).then(src => {
       photo2 = src
@@ -3847,9 +3846,12 @@ async function syncToSupabase(trips, opts) {
       .maybeSingle()
 
     let toSave = trips
+    let changed = false
     if (serverRow && Array.isArray(serverRow.data) && serverRow.data.length) {
       // 2단계: 내 데이터 + 서버 데이터 병합 (trip/day/place 단위 최신 우선)
       toSave = mergeTrips(trips, serverRow.data)
+      // 실제로 내용이 바뀐 경우에만 리렌더 (무한 리렌더 루프 방지)
+      changed = JSON.stringify(toSave) !== JSON.stringify(trips)
       // 병합 결과를 로컬에도 반영
       localStorage.setItem('mt_trips', JSON.stringify(toSave))
     }
@@ -3865,7 +3867,7 @@ async function syncToSupabase(trips, opts) {
       localStorage.setItem('mt_trips_saved_at', String(new Date(now).getTime()))
       updateSyncTime()
       // 병합으로 데이터가 바뀌었으면 화면 갱신
-      if (toSave !== trips && typeof renderPage === 'function') {
+      if (changed && typeof renderPage === 'function') {
         try { renderPage() } catch {}
       }
       return true
