@@ -1119,7 +1119,7 @@ function resolveDayCountryFlag(trip, day) {
   const codes = []
   ;(day.places || []).forEach(p => {
     if (p.category === 'transport') return
-    const code = countryFromAddress(p.address)
+    const code = p.countryCode || countryFromAddress(p.address)
     if (code && codes[codes.length - 1] !== code) codes.push(code)
   })
   if (!codes.length) return
@@ -1819,7 +1819,7 @@ function renderP2Flights(trip) {
           </div>
         </div>
       </div>
-      ${flight.depName ? `<div class="hotel-resolved">✓ ${flight.depName} → ${flight.arrName || '?'}</div>` : ''}
+      ${flight.depName || flight.arrName ? `<div class="hotel-resolved" style="${(flight.depLat == null || flight.arrLat == null) ? 'color:#c00' : ''}">${flight.depLat != null ? '✓' : '✗'} ${flight.depName || '?'} → ${flight.arrLat != null ? '✓' : '✗'} ${flight.arrName || '?'}${(flight.depLat == null || flight.arrLat == null) ? ' (✗ 위치 못 찾음 — 일정에 표시 안 됨)' : ''}</div>` : ''}
       <button type="button" class="hotel-done" style="margin-top:4px">완료</button>`
 
     row.querySelectorAll('.tmode-btn').forEach(b => {
@@ -1963,54 +1963,40 @@ function syncFlightToPlaces(tripId, flightId) {
 
 // 공항 이름/좌표 자동 검색 (사용자가 입력했을 때만 호출됨)
 async function resolveFlightAirport(tripId, flightId, which) {
+  const input = (() => {
+    const t0 = DB.getTrip(tripId); const f0 = t0 && (t0.flights || []).find(x => x.id === flightId)
+    return f0 ? (which === 'dep' ? f0.depInput : f0.arrInput) : null
+  })()
+  if (!input) return
+  if (typeof google === 'undefined' || !google.maps || !google.maps.places) {
+    alert('지도 기능을 아직 불러오지 못했어요. 잠시 후 다시 시도해주세요.')
+    return
+  }
+  let detail = null
+  try {
+    // Places 검색 1회 (Geocoding 사용 안 함) — 도시/나라는 상세정보의 주소 구성요소에서 추출
+    detail = await queryPlaces(input, { language: 'en' })
+  } catch (e) { console.warn('교통편 장소 검색 실패:', e) }
+
   const list = DB.trips
   const t = list.find(x => x.id === tripId)
-  const flight = t.flights.find(x => x.id === flightId)
+  const flight = t && (t.flights || []).find(x => x.id === flightId)
   if (!flight) return
-  const input = which === 'dep' ? flight.depInput : flight.arrInput
-  if (!input) return
-  if (typeof google === 'undefined' || !google.maps || !google.maps.places) return
-  try {
-    const detail = await queryPlaces(input)
-    if (detail) {
-      let lat = detail.lat, lng = detail.lng
-      let displayName = detail.name
-      if (lat != null) {
-        try {
-          const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&language=en&key=AIzaSyCOxrNA76nATskES9MIovvhQyBE7fhVGew`)
-          const geo = await res.json()
-          const result = geo.results && geo.results[0]
-          if (result) {
-            const city = result.address_components.find(c => c.types.includes('locality') || c.types.includes('administrative_area_level_1'))
-            const country = result.address_components.find(c => c.types.includes('country'))
-            if (city && country) displayName = `${city.long_name}, ${country.long_name}`
-            else if (country) displayName = country.long_name
-            if (country) {
-              const flag = countryCodeToFlag(country.short_name)
-              if (which === 'dep') flight._depFlag = flag
-              else flight._arrFlag = flag
-            }
-          }
-        } catch (e) { console.warn('영문 지명 조회 실패:', e) }
-      }
-      if (which === 'dep') {
-        flight.depName = detail.name
-        flight.depCity = displayName
-        flight.depLat = lat
-        flight.depLng = lng
-      } else {
-        flight.arrName = detail.name
-        flight.arrCity = displayName
-        flight.arrLat = lat
-        flight.arrLng = lng
-      }
+
+  if (detail && detail.lat != null) {
+    const cityLabel = detail.city && detail.countryName ? `${detail.city}, ${detail.countryName}`
+                    : (detail.city || detail.countryName || detail.name)
+    const flag = detail.countryCode ? countryCodeToFlag(detail.countryCode) : ''
+    if (which === 'dep') {
+      Object.assign(flight, { depName: detail.name, depCity: cityLabel, depLat: detail.lat, depLng: detail.lng, _depFlag: flag })
     } else {
-      if (which === 'dep') flight.depName = input
-      else flight.arrName = input
+      Object.assign(flight, { arrName: detail.name, arrCity: cityLabel, arrLat: detail.lat, arrLng: detail.lng, _arrFlag: flag })
     }
-  } catch (e) {
-    if (which === 'dep') flight.depName = flight.depName || input
-    else flight.arrName = flight.arrName || input
+  } else {
+    // 못 찾음 — 이름만 저장하고 알려줌 (좌표 없으면 일정에 표시 안 됨)
+    if (which === 'dep') Object.assign(flight, { depName: input, depLat: null, depLng: null })
+    else Object.assign(flight, { arrName: input, arrLat: null, arrLng: null })
+    alert(`"${input}" 위치를 찾지 못했어요.\n역/공항 이름을 조금 더 정확하게 입력해보세요.\n(예: Praha hlavní nádraží, 프라하 중앙역, 인천국제공항)`)
   }
   DB.save(list)
 }
@@ -3140,7 +3126,7 @@ function openNameModal(hintMsg) {
 /* =========================================================
    Places API (사용자 입력 시에만 호출)
    ========================================================= */
-function queryPlaces(input) {
+function queryPlaces(input, opts) {
   return new Promise(resolve => {
     let done = false
     const finish = (v) => { if (!done) { done = true; resolve(v) } }
@@ -3148,10 +3134,11 @@ function queryPlaces(input) {
 
     const svc = new google.maps.places.PlacesService(document.createElement('div'))
     const isId = /^ChIJ|^Eh/.test(input) || (input.length > 25 && !/\s/.test(input))
-    const fields = ['name', 'types', 'opening_hours', 'geometry', 'business_status', 'formatted_address']
+    const fields = ['name', 'types', 'opening_hours', 'geometry', 'business_status', 'formatted_address', 'address_components']
+    const lang = opts && opts.language ? { language: opts.language } : {}
 
     const doDetail = id => {
-      svc.getDetails({ placeId: id, fields }, (r, s) => {
+      svc.getDetails({ placeId: id, fields, ...lang }, (r, s) => {
         clearTimeout(timeout)
         if (s === 'OK') finish(parsePlaceResult(r, id))
         else finish(null)
@@ -3195,7 +3182,7 @@ function queryPlacesNearby(name, coords) {
       (res, s) => {
         if (s === 'OK' && res && res[0]) {
           svc.getDetails(
-            { placeId: res[0].place_id, fields: ['name', 'types', 'opening_hours', 'geometry', 'business_status', 'formatted_address'] },
+            { placeId: res[0].place_id, fields: ['name', 'types', 'opening_hours', 'geometry', 'business_status', 'formatted_address', 'address_components'] },
             (r, s2) => {
               clearTimeout(timeout)
               if (s2 === 'OK') finish(parsePlaceResult(r, res[0].place_id))
@@ -3210,7 +3197,14 @@ function queryPlacesNearby(name, coords) {
 
 function parsePlaceResult(r, placeId) {
   const oh = r.opening_hours
+  const ac = r.address_components || []
+  const pick = t => ac.find(c => (c.types || []).includes(t))
+  const cityC = pick('locality') || pick('postal_town') || pick('administrative_area_level_1')
+  const countryC = pick('country')
   return {
+    city: cityC ? cityC.long_name : null,
+    countryCode: countryC ? countryC.short_name : null,
+    countryName: countryC ? countryC.long_name : null,
     name: r.name,
     category: guessCat(r.types || []),
     hoursWeek: oh && oh.weekday_text ? oh.weekday_text : null,
