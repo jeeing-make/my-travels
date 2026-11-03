@@ -109,20 +109,31 @@ button{cursor:pointer}
 .p2-memo-btn:hover{background:#f0f0f0}
 .p2-memo-cnt{position:absolute;top:-7px;right:-7px;min-width:16px;height:16px;border-radius:8px;background:#000;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
 .p2-memo-cnt:empty{display:none}
-.tnote-list{display:flex;flex-direction:column}
-.tnote{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:.5px solid #eee}
-.tnote-chk{width:15px;height:15px;margin-top:2px;accent-color:#000;flex-shrink:0;cursor:pointer}
-.tnote-dot{width:15px;text-align:center;color:#bbb;flex-shrink:0;line-height:1.5}
-.tnote-txt{flex:1;font-size:12px;border:none;outline:none;resize:none;background:transparent;color:#000;line-height:1.5;padding:0;overflow:hidden}
-.tnote.done .tnote-txt{text-decoration:line-through;color:#aaa}
-.tnote-conv,.tnote-del{font-size:11px;border:none;background:none;color:#bbb;padding:0 2px;flex-shrink:0;line-height:1.5}
-.tnote-conv:hover{color:#000}
-.tnote-del:hover{color:#c00}
-.tnote-add{display:flex;gap:6px;align-items:flex-end}
-.tnote-add textarea{resize:none;flex:1}
-.tnote-type{width:34px;height:34px;border:.5px solid #ddd;background:#fff;font-size:14px;color:#bbb;flex-shrink:0;padding:0}
-.tnote-type.on{border-color:#000;color:#000}
-.tnote-empty{font-size:10px;color:#bbb}
+.nmbox{max-width:540px !important}
+.np-list{display:flex;flex-direction:column}
+.np-item{display:flex;align-items:center;gap:10px;padding:12px 4px;border-bottom:.5px solid #eee;cursor:pointer}
+.np-item:hover{background:#fafafa}
+.np-icon{font-size:15px;flex-shrink:0}
+.np-info{flex:1;min-width:0}
+.np-title{font-size:13px;font-weight:700;color:#000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.np-title.empty{color:#bbb}
+.np-meta{font-size:9px;color:#aaa;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.np-del{font-size:12px;border:none;background:none;color:#ccc;padding:0 4px;flex-shrink:0}
+.np-del:hover{color:#c00}
+.np-add{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;padding:12px 4px;border:none;background:none;text-align:left}
+.np-add:hover{color:#000}
+.np-empty{font-size:10px;color:#bbb;padding:12px 4px}
+.ne-back{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;border:none;background:none;padding:0;align-self:flex-start}
+.ne-back:hover{color:#000}
+.ne-title{font-size:24px;font-weight:900;letter-spacing:-.02em;border:none;outline:none;width:100%;padding:0;color:#000;background:transparent}
+.ne-title::placeholder{color:#ddd}
+.ne-hint{font-size:9px;color:#bbb;margin-top:-8px}
+.ne-blocks{display:flex;flex-direction:column;gap:2px;min-height:240px;padding-bottom:40px;cursor:text}
+.nb{display:flex;align-items:flex-start;gap:8px}
+.nb-chk{width:15px;height:15px;margin-top:4px;accent-color:#000;flex-shrink:0;cursor:pointer}
+.nb-txt{flex:1;font-size:14px;line-height:1.6;border:none;outline:none;resize:none;background:transparent;color:#000;padding:0;overflow:hidden;min-height:22px;display:block}
+.nb-txt::placeholder{color:#ccc}
+.nb.done .nb-txt{text-decoration:line-through;color:#aaa}
 
 /* 읽기전용 공유모드: 모든 수정 UI 숨김 */
 .share-mode .tcard-ov,
@@ -1799,123 +1810,286 @@ function renderP2Hotels(trip) {
   })
 }
 
-/* ── 여행 메모 (2페이지 제목 옆 📝) ── */
+/* ── 여행 메모 (2페이지 제목 옆 📝) — 노션식 페이지 ──
+   trip.notes = [{ id, title, blocks:[{id, type:'text'|'check', text, checked}], _updatedAt }]
+   페이지 안에서 줄 맨 앞에 "[ ] " 또는 "[] " 입력 → 체크박스로 변환 ("[x] " = 체크된 상태) */
+function nbId() { return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) }
+function escHtml(s) { return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])) }
+function autoGrow(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px' }
+
 function updateMemoBadge(trip) {
   const el = document.getElementById('p2-memo-cnt')
   if (!el) return
-  const notes = (trip && trip.notes) || []
-  const checks = notes.filter(n => n.isCheck)
-  el.textContent = !notes.length ? ''
-    : checks.length ? `${checks.filter(n => n.checked).length}/${checks.length}` : String(notes.length)
+  const pages = ((trip && trip.notes) || []).filter(n => Array.isArray(n.blocks))
+  el.textContent = pages.length ? String(pages.length) : ''
 }
 
-function mutateNote(tripId, noteId, patch) {
+// 이전 버전(한 줄짜리 메모 목록)으로 저장된 데이터를 페이지 1개로 변환
+function migrateOldNotes(tripId) {
+  if (state.shareMode) return
+  const list = DB.rawTrips
+  const t = list.find(x => x.id === tripId)
+  if (!t || !t.notes) return
+  const old = t.notes.filter(n => !n._deleted && !Array.isArray(n.blocks) && n.text != null)
+  if (!old.length) return
+  const now = Date.now()
+  old.forEach(n => { n._deleted = now; n._updatedAt = now })
+  t.notes.push({
+    id: 'n' + now, title: '메모', _updatedAt: now,
+    blocks: old.map(n => ({ id: nbId(), type: n.isCheck ? 'check' : 'text', text: n.text || '', checked: !!n.checked }))
+  })
+  DB.save(list)
+}
+
+function saveNotePage(tripId, page) {
   const list = DB.rawTrips
   const t = list.find(x => x.id === tripId)
   if (!t) return
   t.notes = t.notes || []
-  const now = Date.now()
-  if (noteId === null) {
-    t.notes.push({ id: 'n' + now + Math.random().toString(36).slice(2, 6), ...patch, _updatedAt: now })
-  } else {
-    const n = t.notes.find(x => x.id === noteId)
-    if (n) Object.assign(n, patch, { _updatedAt: now })
-  }
+  const data = { id: page.id, title: page.title || '', blocks: page.blocks.map(b => ({ ...b })), _updatedAt: Date.now() }
+  const i = t.notes.findIndex(n => n.id === page.id)
+  if (i >= 0) t.notes[i] = { ...t.notes[i], ...data }
+  else t.notes.push(data)
   DB.save(list)
   updateMemoBadge(DB.getTrip(tripId))
 }
 
-function autoGrow(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px' }
+function deleteNotePage(tripId, pageId) {
+  const list = DB.rawTrips
+  const t = list.find(x => x.id === tripId)
+  const n = t && (t.notes || []).find(x => x.id === pageId)
+  if (!n) return
+  n._deleted = Date.now(); n._updatedAt = Date.now()
+  DB.save(list)
+  updateMemoBadge(DB.getTrip(tripId))
+}
 
 function openTripNotes(tripId) {
   const ro = !!state.shareMode
+  migrateOldNotes(tripId)
+
   const modal = document.getElementById('modal')
-  modal.innerHTML = `<div class="mbox">
+  modal.innerHTML = `<div class="mbox nmbox">
     <div class="mhd">
-      <span class="mtitle">[ 📝 여행 메모 ]</span>
+      <span class="mtitle" id="nm-title">[ 📝 여행 메모 ]</span>
       <button class="mclose" onclick="closeModal()">×</button>
     </div>
-    <div class="mbody">
-      <div class="tnote-list" id="tnote-list"></div>
-      ${ro ? '' : `<div class="tnote-add">
-        <button type="button" class="tnote-type" id="tnote-type" title="체크박스 항목으로 추가">☐</button>
-        <textarea class="min" id="tnote-in" rows="1" placeholder="메모 입력 (Enter 추가 · Shift+Enter 줄바꿈)"></textarea>
-        <button type="button" class="mbtn" id="tnote-ok">추가</button>
-      </div>`}
-    </div>
+    <div class="mbody" id="nm-body"></div>
   </div>`
   modal.style.display = 'flex'
+  const body = document.getElementById('nm-body')
+  const titleEl = document.getElementById('nm-title')
 
-  let addAsCheck = false
+  let current = null      // 편집 중인 페이지 { id, title, blocks }
+  let dirty = false
+  let saveTimer = null
+  const flush = () => {
+    clearTimeout(saveTimer); saveTimer = null
+    if (current && dirty && !ro) { saveNotePage(tripId, current); dirty = false }
+  }
+  const schedule = () => {
+    if (ro) return
+    dirty = true
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(flush, 500)
+  }
 
-  const draw = () => {
+  const CHECK_RE = /^\[( |x|X)?\] /
+  const parseLine = (line, inheritType) => {
+    const m = line.match(CHECK_RE)
+    if (m) return { id: nbId(), type: 'check', checked: /x/i.test(m[1] || ''), text: line.slice(m[0].length) }
+    return { id: nbId(), type: inheritType, text: line, checked: false }
+  }
+
+  /* ── 목록 화면 ── */
+  const showList = () => {
+    flush()
+    current = null
+    titleEl.textContent = '[ 📝 여행 메모 ]'
     const trip = DB.getTrip(tripId)
-    const notes = (trip && trip.notes) || []
-    const wrap = document.getElementById('tnote-list')
-    if (!wrap) return
-    if (!notes.length) { wrap.innerHTML = '<div class="tnote-empty">아직 메모가 없어요</div>'; return }
-    wrap.innerHTML = ''
-    notes.forEach(n => {
-      const row = document.createElement('div')
-      row.className = 'tnote' + (n.isCheck && n.checked ? ' done' : '')
-      row.innerHTML = `
-        ${n.isCheck ? `<input type="checkbox" class="tnote-chk" ${n.checked ? 'checked' : ''} ${ro ? 'disabled' : ''}/>` : '<span class="tnote-dot">•</span>'}
-        <textarea class="tnote-txt" rows="1" ${ro ? 'readonly' : ''}></textarea>
-        ${ro ? '' : `<button type="button" class="tnote-conv" title="체크박스 전환">${n.isCheck ? '•' : '☐'}</button>
-        <button type="button" class="tnote-del" title="삭제">×</button>`}`
-      const ta = row.querySelector('.tnote-txt')
-      ta.value = n.text || ''
-      requestAnimationFrame(() => autoGrow(ta))
+    const pages = ((trip && trip.notes) || []).filter(n => Array.isArray(n.blocks))
+      .sort((a, b) => (b._updatedAt || 0) - (a._updatedAt || 0))
 
-      if (!ro) {
-        const chk = row.querySelector('.tnote-chk')
-        if (chk) chk.onchange = () => { mutateNote(tripId, n.id, { checked: chk.checked }); draw() }
-        let timer
-        ta.oninput = () => {
-          autoGrow(ta)
-          clearTimeout(timer)
-          timer = setTimeout(() => { mutateNote(tripId, n.id, { text: ta.value }); n.text = ta.value }, 400)
+    body.innerHTML = `
+      <div class="np-list">
+        ${pages.length ? pages.map(p => {
+          const checks = p.blocks.filter(b => b.type === 'check')
+          const done = checks.filter(b => b.checked).length
+          const preview = p.blocks.map(b => b.text).filter(Boolean).join(' · ').slice(0, 80)
+          const meta = (checks.length ? `☑ ${done}/${checks.length} · ` : '') + (preview || '빈 페이지')
+          return `<div class="np-item" data-id="${p.id}">
+            <span class="np-icon">📄</span>
+            <div class="np-info">
+              <div class="np-title ${p.title ? '' : 'empty'}">${escHtml(p.title || '제목 없음')}</div>
+              <div class="np-meta">${escHtml(meta)}</div>
+            </div>
+            ${ro ? '' : `<button type="button" class="np-del" data-del="${p.id}" title="삭제">×</button>`}
+          </div>`
+        }).join('') : '<div class="np-empty">아직 메모가 없어요</div>'}
+      </div>
+      ${ro ? '' : '<button type="button" class="np-add">+ 새 페이지</button>'}`
+
+    body.querySelectorAll('.np-item').forEach(el => {
+      el.onclick = e => {
+        const del = e.target.closest('[data-del]')
+        if (del) {
+          e.stopPropagation()
+          if (!confirm('이 메모 페이지를 삭제할까요?')) return
+          deleteNotePage(tripId, del.dataset.del)
+          showList()
+          return
         }
-        ta.onblur = () => {
-          clearTimeout(timer)
-          if (ta.value !== (n.text || '')) { mutateNote(tripId, n.id, { text: ta.value }); n.text = ta.value }
+        const p = pages.find(x => x.id === el.dataset.id)
+        if (p) openPage(p)
+      }
+    })
+    const addBtn = body.querySelector('.np-add')
+    if (addBtn) addBtn.onclick = () => {
+      openPage({ id: 'n' + Date.now() + Math.random().toString(36).slice(2, 6), title: '', blocks: [] }, true)
+    }
+  }
+
+  /* ── 페이지 편집 화면 ── */
+  const openPage = (page, isNew) => {
+    current = {
+      id: page.id,
+      title: page.title || '',
+      blocks: (page.blocks && page.blocks.length ? page.blocks : [{ id: nbId(), type: 'text', text: '' }]).map(b => ({ ...b }))
+    }
+    dirty = false
+    titleEl.textContent = '[ 📝 메모 ]'
+    body.innerHTML = `
+      <button type="button" class="ne-back">← 목록</button>
+      <input class="ne-title" id="ne-title" placeholder="제목 없음" ${ro ? 'readonly' : ''}/>
+      ${ro ? '' : '<div class="ne-hint">줄 맨 앞에 [ ] + 스페이스 → 체크박스 · Enter 새 줄 · 빈 체크박스에서 Enter/←지우기 → 일반 줄</div>'}
+      <div class="ne-blocks" id="ne-blocks"></div>`
+
+    body.querySelector('.ne-back').onclick = showList
+    const tIn = document.getElementById('ne-title')
+    tIn.value = current.title
+    tIn.oninput = () => { current.title = tIn.value; schedule() }
+    tIn.onkeydown = e => {
+      if (e.isComposing || e.keyCode === 229) return
+      if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); focusBlock(0, 0) }
+    }
+
+    const wrap = document.getElementById('ne-blocks')
+    wrap.onclick = e => { if (e.target === wrap) focusBlock(current.blocks.length - 1, null) }
+
+    drawBlocks()
+    if (!ro) setTimeout(() => { if (isNew) tIn.focus(); else focusBlock(current.blocks.length - 1, null) }, 50)
+  }
+
+  const focusBlock = (idx, pos) => {
+    const tas = document.querySelectorAll('#ne-blocks .nb-txt')
+    const ta = tas[Math.max(0, Math.min(idx, tas.length - 1))]
+    if (!ta) return
+    ta.focus()
+    const p = pos == null ? ta.value.length : Math.min(pos, ta.value.length)
+    ta.setSelectionRange(p, p)
+  }
+
+  const drawBlocks = (focusIdx, caret) => {
+    const wrap = document.getElementById('ne-blocks')
+    if (!wrap || !current) return
+    wrap.innerHTML = ''
+    current.blocks.forEach((b, i) => {
+      const row = document.createElement('div')
+      row.className = 'nb' + (b.type === 'check' && b.checked ? ' done' : '')
+      if (b.type === 'check') {
+        const c = document.createElement('input')
+        c.type = 'checkbox'
+        c.className = 'nb-chk'
+        c.checked = !!b.checked
+        c.disabled = ro
+        c.onchange = () => { b.checked = c.checked; row.classList.toggle('done', c.checked); schedule() }
+        row.appendChild(c)
+      }
+      const ta = document.createElement('textarea')
+      ta.className = 'nb-txt'
+      ta.rows = 1
+      ta.value = b.text || ''
+      ta.readOnly = ro
+      if (!ro && current.blocks.length === 1 && !b.text) ta.placeholder = '내용을 입력하세요…  ([ ] + 스페이스 = 체크박스)'
+      row.appendChild(ta)
+      wrap.appendChild(row)
+      requestAnimationFrame(() => autoGrow(ta))
+      if (!ro) bindBlock(ta, b, i)
+    })
+    if (focusIdx != null) focusBlock(focusIdx, caret)
+  }
+
+  const bindBlock = (ta, b, i) => {
+    ta.oninput = () => {
+      // 줄바꿈이 들어오면(붙여넣기 / 한글 입력 중 Enter) 여러 줄로 쪼갬
+      if (ta.value.includes('\n')) {
+        const afterLen = ta.value.length - ta.selectionStart
+        const lines = ta.value.split('\n')
+        if (b.type === 'check' && lines.length === 2 && !lines[0] && !lines[1]) {
+          b.type = 'text'; b.text = ''; b.checked = false
+          schedule(); drawBlocks(i, 0); return
         }
-        row.querySelector('.tnote-conv').onclick = () => { mutateNote(tripId, n.id, { text: ta.value, isCheck: !n.isCheck, checked: false }); draw() }
-        row.querySelector('.tnote-del').onclick = () => {
-          if (!confirm('이 메모를 삭제할까요?')) return
-          mutateNote(tripId, n.id, { _deleted: Date.now() })
-          draw()
+        const first = b.type === 'text' ? parseLine(lines[0], 'text') : null
+        if (first && first.type === 'check') { b.type = 'check'; b.checked = first.checked; b.text = first.text }
+        else b.text = lines[0]
+        const rest = lines.slice(1).map(l => parseLine(l, b.type))
+        current.blocks.splice(i + 1, 0, ...rest)
+        const lastLen = rest[rest.length - 1].text.length
+        schedule(); drawBlocks(i + rest.length, Math.max(0, lastLen - afterLen)); return
+      }
+      // "[ ] " 로 시작하면 체크박스로 변환
+      if (b.type === 'text') {
+        const m = ta.value.match(CHECK_RE)
+        if (m) {
+          const caret = Math.max(0, ta.selectionStart - m[0].length)
+          b.type = 'check'; b.checked = /x/i.test(m[1] || ''); b.text = ta.value.slice(m[0].length)
+          schedule(); drawBlocks(i, caret); return
         }
       }
-      wrap.appendChild(row)
-    })
-  }
-  draw()
+      b.text = ta.value
+      autoGrow(ta)
+      schedule()
+    }
 
-  if (ro) return
-  const inp = document.getElementById('tnote-in')
-  const typeBtn = document.getElementById('tnote-type')
-  typeBtn.onclick = () => {
-    addAsCheck = !addAsCheck
-    typeBtn.classList.toggle('on', addAsCheck)
-    typeBtn.textContent = addAsCheck ? '☑' : '☐'
-    inp.focus()
+    ta.onkeydown = e => {
+      if (e.isComposing || e.keyCode === 229) return
+      const s = ta.selectionStart, en = ta.selectionEnd
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        // 빈 체크박스에서 Enter → 일반 줄로
+        if (b.type === 'check' && !ta.value) { b.type = 'text'; b.checked = false; schedule(); drawBlocks(i, 0); return }
+        const before = ta.value.slice(0, s), after = ta.value.slice(en)
+        b.text = before
+        current.blocks.splice(i + 1, 0, { id: nbId(), type: b.type, text: after, checked: false })
+        schedule(); drawBlocks(i + 1, 0); return
+      }
+      if (e.key === 'Backspace' && s === 0 && en === 0) {
+        // 체크박스 맨 앞에서 지우기 → 일반 줄로
+        if (b.type === 'check') { e.preventDefault(); b.type = 'text'; b.checked = false; schedule(); drawBlocks(i, 0); return }
+        // 일반 줄 맨 앞에서 지우기 → 윗줄과 합치기
+        if (i > 0) {
+          e.preventDefault()
+          const prev = current.blocks[i - 1]
+          const pos = (prev.text || '').length
+          prev.text = (prev.text || '') + ta.value
+          current.blocks.splice(i, 1)
+          schedule(); drawBlocks(i - 1, pos); return
+        }
+      }
+      if (e.key === 'ArrowUp' && s === 0) {
+        e.preventDefault()
+        if (i > 0) focusBlock(i - 1, null)
+        else document.getElementById('ne-title')?.focus()
+        return
+      }
+      if (e.key === 'ArrowDown' && s === ta.value.length && i < current.blocks.length - 1) {
+        e.preventDefault(); focusBlock(i + 1, 0)
+      }
+    }
+    ta.onblur = flush
   }
-  const add = () => {
-    const v = inp.value.trim()
-    if (!v) return
-    mutateNote(tripId, null, { text: v, isCheck: addAsCheck, checked: false })
-    inp.value = ''
-    autoGrow(inp)
-    draw()
-    inp.focus()
-  }
-  document.getElementById('tnote-ok').onclick = add
-  inp.oninput = () => autoGrow(inp)
-  inp.onkeydown = e => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); add() }
-  }
-  setTimeout(() => inp.focus(), 50)
+
+  showList()
 }
 
 document.getElementById('p2-memo-btn')?.addEventListener('click', () => {
