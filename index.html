@@ -103,6 +103,27 @@ button{cursor:pointer}
 .hotel-redate:hover,.h-redate-ok:hover{border-color:#000;color:#000}
 .user-avatar{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#000;color:#fff;font-size:10px;font-weight:700;letter-spacing:0;cursor:default}
 
+/* 여행 메모 */
+.p2-ti-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.p2-memo-btn{position:relative;flex-shrink:0;width:34px;height:34px;border:1px solid #000;background:#fff;font-size:15px;display:flex;align-items:center;justify-content:center;padding:0}
+.p2-memo-btn:hover{background:#f0f0f0}
+.p2-memo-cnt{position:absolute;top:-7px;right:-7px;min-width:16px;height:16px;border-radius:8px;background:#000;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
+.p2-memo-cnt:empty{display:none}
+.tnote-list{display:flex;flex-direction:column}
+.tnote{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:.5px solid #eee}
+.tnote-chk{width:15px;height:15px;margin-top:2px;accent-color:#000;flex-shrink:0;cursor:pointer}
+.tnote-dot{width:15px;text-align:center;color:#bbb;flex-shrink:0;line-height:1.5}
+.tnote-txt{flex:1;font-size:12px;border:none;outline:none;resize:none;background:transparent;color:#000;line-height:1.5;padding:0;overflow:hidden}
+.tnote.done .tnote-txt{text-decoration:line-through;color:#aaa}
+.tnote-conv,.tnote-del{font-size:11px;border:none;background:none;color:#bbb;padding:0 2px;flex-shrink:0;line-height:1.5}
+.tnote-conv:hover{color:#000}
+.tnote-del:hover{color:#c00}
+.tnote-add{display:flex;gap:6px;align-items:flex-end}
+.tnote-add textarea{resize:none;flex:1}
+.tnote-type{width:34px;height:34px;border:.5px solid #ddd;background:#fff;font-size:14px;color:#bbb;flex-shrink:0;padding:0}
+.tnote-type.on{border-color:#000;color:#000}
+.tnote-empty{font-size:10px;color:#bbb}
+
 /* 읽기전용 공유모드: 모든 수정 UI 숨김 */
 .share-mode .tcard-ov,
 .share-mode .hotel-section,
@@ -372,7 +393,10 @@ button{cursor:pointer}
 <div id="p2" class="page">
   <div class="p2-hd">
     <div class="p2-ey" id="p2-sub"></div>
-    <div class="p2-ti" id="p2-ti"></div>
+    <div class="p2-ti-row">
+      <div class="p2-ti" id="p2-ti"></div>
+      <button type="button" class="p2-memo-btn" id="p2-memo-btn" title="여행 메모">📝<span class="p2-memo-cnt" id="p2-memo-cnt"></span></button>
+    </div>
   </div>
   <div class="hotel-section">
     <div class="hotel-section-title" id="hotel-section-toggle" style="cursor:pointer">[ 🏨 숙소 ▾ ]</div>
@@ -532,6 +556,7 @@ function stampTimestamps(trips, prevTrips) {
     })
     ;(trip.hotels || []).forEach(h => { if (!h._updatedAt) h._updatedAt = now })
     ;(trip.flights || []).forEach(f => { if (!f._updatedAt) f._updatedAt = now })
+    ;(trip.notes || []).forEach(n => { if (!n._updatedAt) n._updatedAt = now })
   })
   return trips
 }
@@ -561,6 +586,7 @@ function mergeTrip(a, b) {
   base.days = mergeById(a.days, b.days, mergeDay)
   base.hotels = mergeById(a.hotels, b.hotels)
   base.flights = mergeById(a.flights, b.flights)
+  base.notes = mergeById(a.notes, b.notes)
   return base
 }
 
@@ -617,6 +643,7 @@ function preserveDeletions(next, prev) {
     if (!nt) { next.push(pt._deleted ? pt : { ...pt, _deleted: now, _updatedAt: now }); return }
     keepMissing(nt, 'hotels', pt.hotels, now)
     keepMissing(nt, 'flights', pt.flights, now)
+    keepMissing(nt, 'notes', pt.notes, now)
     nt.days = nt.days || []
     const ndMap = new Map(nt.days.map(d => [d.id, d]))
     ;(pt.days || []).forEach(pd => {
@@ -640,7 +667,8 @@ const DB = {
           places: (d.places || []).filter(p => !p._deleted)
         })),
         hotels: (t.hotels || []).filter(h => !h._deleted),
-        flights: (t.flights || []).filter(f => !f._deleted)
+        flights: (t.flights || []).filter(f => !f._deleted),
+        notes: (t.notes || []).filter(n => !n._deleted)
       }))
   },
   // 저장/병합용 — tombstone 포함 원본
@@ -927,7 +955,7 @@ window.addEventListener('resize', () => {
 
 // 제목 안 이모지를 작게 감싸기 (글자 폭 절약 + 잘림 방지)
 function wrapEmoji(str) {
-  const emojiRe = /(\p{Extended_Pictographic}(\u200d\p{Extended_Pictographic})*|\p{Regional_Indicator}{2})/gu
+  const emojiRe = /(\p{Extended_Pictographic}(‍\p{Extended_Pictographic})*|\p{Regional_Indicator}{2})/gu
   return String(str).replace(emojiRe, '<span class="em">$1</span>')
 }
 
@@ -1172,6 +1200,7 @@ function renderP2() {
   if (!trip) return
   document.getElementById('p2-sub').textContent = `${trip.dateStart || ''} – ${trip.dateEnd || ''}  ·  ${trip.countries || ''}`
   document.getElementById('p2-ti').textContent = cleanName(trip.name)
+  updateMemoBadge(trip)
 
   renderP2Hotels(trip)
   renderP2Flights(trip)
@@ -1769,6 +1798,129 @@ function renderP2Hotels(trip) {
     wrap.appendChild(row)
   })
 }
+
+/* ── 여행 메모 (2페이지 제목 옆 📝) ── */
+function updateMemoBadge(trip) {
+  const el = document.getElementById('p2-memo-cnt')
+  if (!el) return
+  const notes = (trip && trip.notes) || []
+  const checks = notes.filter(n => n.isCheck)
+  el.textContent = !notes.length ? ''
+    : checks.length ? `${checks.filter(n => n.checked).length}/${checks.length}` : String(notes.length)
+}
+
+function mutateNote(tripId, noteId, patch) {
+  const list = DB.rawTrips
+  const t = list.find(x => x.id === tripId)
+  if (!t) return
+  t.notes = t.notes || []
+  const now = Date.now()
+  if (noteId === null) {
+    t.notes.push({ id: 'n' + now + Math.random().toString(36).slice(2, 6), ...patch, _updatedAt: now })
+  } else {
+    const n = t.notes.find(x => x.id === noteId)
+    if (n) Object.assign(n, patch, { _updatedAt: now })
+  }
+  DB.save(list)
+  updateMemoBadge(DB.getTrip(tripId))
+}
+
+function autoGrow(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px' }
+
+function openTripNotes(tripId) {
+  const ro = !!state.shareMode
+  const modal = document.getElementById('modal')
+  modal.innerHTML = `<div class="mbox">
+    <div class="mhd">
+      <span class="mtitle">[ 📝 여행 메모 ]</span>
+      <button class="mclose" onclick="closeModal()">×</button>
+    </div>
+    <div class="mbody">
+      <div class="tnote-list" id="tnote-list"></div>
+      ${ro ? '' : `<div class="tnote-add">
+        <button type="button" class="tnote-type" id="tnote-type" title="체크박스 항목으로 추가">☐</button>
+        <textarea class="min" id="tnote-in" rows="1" placeholder="메모 입력 (Enter 추가 · Shift+Enter 줄바꿈)"></textarea>
+        <button type="button" class="mbtn" id="tnote-ok">추가</button>
+      </div>`}
+    </div>
+  </div>`
+  modal.style.display = 'flex'
+
+  let addAsCheck = false
+
+  const draw = () => {
+    const trip = DB.getTrip(tripId)
+    const notes = (trip && trip.notes) || []
+    const wrap = document.getElementById('tnote-list')
+    if (!wrap) return
+    if (!notes.length) { wrap.innerHTML = '<div class="tnote-empty">아직 메모가 없어요</div>'; return }
+    wrap.innerHTML = ''
+    notes.forEach(n => {
+      const row = document.createElement('div')
+      row.className = 'tnote' + (n.isCheck && n.checked ? ' done' : '')
+      row.innerHTML = `
+        ${n.isCheck ? `<input type="checkbox" class="tnote-chk" ${n.checked ? 'checked' : ''} ${ro ? 'disabled' : ''}/>` : '<span class="tnote-dot">•</span>'}
+        <textarea class="tnote-txt" rows="1" ${ro ? 'readonly' : ''}></textarea>
+        ${ro ? '' : `<button type="button" class="tnote-conv" title="체크박스 전환">${n.isCheck ? '•' : '☐'}</button>
+        <button type="button" class="tnote-del" title="삭제">×</button>`}`
+      const ta = row.querySelector('.tnote-txt')
+      ta.value = n.text || ''
+      requestAnimationFrame(() => autoGrow(ta))
+
+      if (!ro) {
+        const chk = row.querySelector('.tnote-chk')
+        if (chk) chk.onchange = () => { mutateNote(tripId, n.id, { checked: chk.checked }); draw() }
+        let timer
+        ta.oninput = () => {
+          autoGrow(ta)
+          clearTimeout(timer)
+          timer = setTimeout(() => { mutateNote(tripId, n.id, { text: ta.value }); n.text = ta.value }, 400)
+        }
+        ta.onblur = () => {
+          clearTimeout(timer)
+          if (ta.value !== (n.text || '')) { mutateNote(tripId, n.id, { text: ta.value }); n.text = ta.value }
+        }
+        row.querySelector('.tnote-conv').onclick = () => { mutateNote(tripId, n.id, { text: ta.value, isCheck: !n.isCheck, checked: false }); draw() }
+        row.querySelector('.tnote-del').onclick = () => {
+          if (!confirm('이 메모를 삭제할까요?')) return
+          mutateNote(tripId, n.id, { _deleted: Date.now() })
+          draw()
+        }
+      }
+      wrap.appendChild(row)
+    })
+  }
+  draw()
+
+  if (ro) return
+  const inp = document.getElementById('tnote-in')
+  const typeBtn = document.getElementById('tnote-type')
+  typeBtn.onclick = () => {
+    addAsCheck = !addAsCheck
+    typeBtn.classList.toggle('on', addAsCheck)
+    typeBtn.textContent = addAsCheck ? '☑' : '☐'
+    inp.focus()
+  }
+  const add = () => {
+    const v = inp.value.trim()
+    if (!v) return
+    mutateNote(tripId, null, { text: v, isCheck: addAsCheck, checked: false })
+    inp.value = ''
+    autoGrow(inp)
+    draw()
+    inp.focus()
+  }
+  document.getElementById('tnote-ok').onclick = add
+  inp.oninput = () => autoGrow(inp)
+  inp.onkeydown = e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); add() }
+  }
+  setTimeout(() => inp.focus(), 50)
+}
+
+document.getElementById('p2-memo-btn')?.addEventListener('click', () => {
+  if (state.tripId) openTripNotes(state.tripId)
+})
 
 function renderP3IfActive() {
   if (state.page === 'p3') renderP3()
@@ -3529,7 +3681,7 @@ const GUIDE_STEPS = [
   {
     tag: '[ STEP 3 / 7 ]',
     title: '숙소 · 교통편\n자동 연결',
-    desc: '여행 화면 상단 [ 🏨 숙소 ]에 구글맵 링크나 호텔명을 입력하고 체크인·체크아웃 날짜를 고르면, 해당 날짜 일정에 숙소 마커가 자동으로 표시돼요.\n\n[ 🚐 교통편 ]에는 비행기·기차·버스·자동차를 선택하고 출발/도착지와 시간을 입력하면 해당 날짜 일정 카드에 자동 추가돼요.',
+    desc: '여행 화면 상단 [ 🏨 숙소 ]에 구글맵 링크나 호텔명을 입력하고 체크인·체크아웃 날짜를 고르면, 해당 날짜 일정에 숙소 마커가 자동으로 표시돼요.\n\n[ 🚐 교통편 ]에는 비행기·기차·버스·자동차를 선택하고 출발/도착지와 시간을 입력하면 해당 날짜 일정 카드에 자동 추가돼요.\n\n제목 옆 📝 아이콘으로 여행별 메모·체크리스트도 남길 수 있어요.',
     visual: () => `
       <div class="gv-card gv-pulse" style="position:absolute;top:10px;left:14px;width:254px;height:34px;display:flex;align-items:center;padding-left:10px;font-size:10px">[ 🏨 숙소 ▴ ]</div>
       <div style="position:absolute;top:50px;left:14px;width:254px;border:.5px solid #ddd;padding:8px 10px;font-size:9px;display:flex;flex-direction:column;gap:4px;background:#fff">
